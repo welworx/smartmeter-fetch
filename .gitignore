@@ -1,0 +1,33 @@
+# Binaries
+smartmeter-fetch
+smartmeter-fetch-test
+*.o
+*.a
+*.so
+
+# macOS
+.DS_Store
+
+# Log output
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+*.test
+*.out
+
+# Go
+/vendor/
+
+# Superpowers scratch and planning docs — local working notes, not part of
+# the published repo.
+.superpowers/
+docs/superpowers/
+
+# Fetched smart meter data (JSON store default location)
+/data/
