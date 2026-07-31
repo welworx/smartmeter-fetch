@@ -1,5 +1,6 @@
 // Package config owns ~/.config/smartmeter-fetch/credentials.enc, a single
-// passphrase-encrypted file holding every profile's name/username/password.
+// passphrase-encrypted file holding every profile's name/provider/username/
+// password.
 package config
 
 import (
@@ -19,6 +20,7 @@ import (
 // Profile is one stored portal login.
 type Profile struct {
 	Name     string `json:"name"`
+	Provider string `json:"provider"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }

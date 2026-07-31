@@ -133,11 +133,15 @@ type providerFlags struct {
 	verbose   bool
 }
 
+// defaultProviderName is used when a stored profile predates the Provider
+// field (empty) and as the default for the -provider flag.
+const defaultProviderName = "evn"
+
 func (c *providerFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.name, "provider", "evn", "grid operator provider (only \"evn\" is currently supported)")
+	fs.StringVar(&c.name, "provider", defaultProviderName, "grid operator provider (only \"evn\" is currently supported)")
 	fs.StringVar(&c.user, "user", os.Getenv("SMARTMETER_USER"), "portal username (default: $SMARTMETER_USER)")
 	fs.StringVar(&c.password, "password", os.Getenv("SMARTMETER_PASSWORD"), "portal password (default: $SMARTMETER_PASSWORD)")
-	fs.StringVar(&c.profile, "profile", "", "name of a stored profile to use instead of -user/-password (see: smartmeter-fetch profile add); default: first configured profile")
+	fs.StringVar(&c.profile, "profile", "", "name of a stored profile to use instead of -user/-password/-provider (see: smartmeter-fetch profile add); default: first configured profile")
 	fs.StringVar(&c.userAgent, "user-agent", "", "User-Agent header sent to the portal (default: a browser-like UA; some portals reject Go's default)")
 	fs.BoolVar(&c.verbose, "v", false, "verbose (debug) logging: request URLs and auth events")
 	fs.BoolVar(&c.verbose, "verbose", false, "verbose (debug) logging: request URLs and auth events")
@@ -158,53 +162,65 @@ var providerFactories = map[string]func(user, password, userAgent string, logger
 }
 
 func (c *providerFlags) newProvider(logger *slog.Logger) (provider.Provider, error) {
-	user, password, err := c.resolveCredentials()
+	user, password, providerName, err := c.resolveCredentials()
 	if err != nil {
 		return nil, err
 	}
-	factory, ok := providerFactories[c.name]
+	factory, ok := providerFactories[providerName]
 	if !ok {
-		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", c.name)
+		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", providerName)
 	}
 	return factory(user, password, c.userAgent, logger), nil
 }
 
-// resolveCredentials returns the portal username/password to use: -user/
-// -password (which already default from $SMARTMETER_USER/$SMARTMETER_PASSWORD,
-// see register) take priority; otherwise a profile is loaded from
+// resolveCredentials returns the portal username/password/provider to use.
+// -user/-password (which already default from $SMARTMETER_USER/
+// $SMARTMETER_PASSWORD, see register) take priority, in which case -provider
+// picks the provider as usual. Otherwise a profile is loaded from
 // credentials.enc, selected by -profile or, if that's empty, the first
-// configured profile.
-func (c *providerFlags) resolveCredentials() (user, password string, err error) {
+// configured profile — and the profile's own stored provider is used
+// instead of -provider, since a profile is a specific portal login.
+func (c *providerFlags) resolveCredentials() (user, password, providerName string, err error) {
 	if c.user != "" && c.password != "" {
-		return c.user, c.password, nil
+		return c.user, c.password, c.name, nil
 	}
 	dir, err := config.Dir()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if !config.CredentialsExist(dir) {
-		return "", "", errors.New("missing credentials: pass -user/-password, set SMARTMETER_USER/SMARTMETER_PASSWORD, or add a profile (smartmeter-fetch profile add <name>)")
+		return "", "", "", errors.New("missing credentials: pass -user/-password, set SMARTMETER_USER/SMARTMETER_PASSWORD, or add a profile (smartmeter-fetch profile add <name>)")
 	}
 	pass, err := readPassphrase(false)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	profiles, err := config.LoadSecrets(dir, pass)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if len(profiles) == 0 {
-		return "", "", errors.New("no profiles configured (run: smartmeter-fetch profile add <name>)")
+		return "", "", "", errors.New("no profiles configured (run: smartmeter-fetch profile add <name>)")
 	}
 	if c.profile != "" {
 		for _, p := range profiles {
 			if p.Name == c.profile {
-				return p.Username, p.Password, nil
+				return p.Username, p.Password, providerOrDefault(p.Provider), nil
 			}
 		}
-		return "", "", fmt.Errorf("no profile %q (run: smartmeter-fetch profile add %s)", c.profile, c.profile)
+		return "", "", "", fmt.Errorf("no profile %q (run: smartmeter-fetch profile add %s)", c.profile, c.profile)
 	}
-	return profiles[0].Username, profiles[0].Password, nil
+	first := profiles[0]
+	return first.Username, first.Password, providerOrDefault(first.Provider), nil
+}
+
+// providerOrDefault fills in defaultProviderName for a profile saved before
+// the Provider field existed.
+func providerOrDefault(p string) string {
+	if p == "" {
+		return defaultProviderName
+	}
+	return p
 }
 
 func newLogger(verbose bool, w io.Writer) *slog.Logger {

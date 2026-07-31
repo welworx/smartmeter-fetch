@@ -55,22 +55,26 @@ func TestReadPassphraseFromEnv(t *testing.T) {
 }
 
 func TestApplyProfileFields(t *testing.T) {
-	secrets := []config.Profile{{Name: "main", Username: "alice", Password: "pw1"}}
-	applyProfileFields(secrets, 0, "", "pw2")
-	if secrets[0].Username != "alice" || secrets[0].Password != "pw2" {
+	secrets := []config.Profile{{Name: "main", Provider: "evn", Username: "alice", Password: "pw1"}}
+	applyProfileFields(secrets, 0, "", "", "pw2")
+	if secrets[0].Provider != "evn" || secrets[0].Username != "alice" || secrets[0].Password != "pw2" {
 		t.Fatalf("password-only update: got %+v", secrets[0])
 	}
-	applyProfileFields(secrets, 0, "bob", "")
-	if secrets[0].Username != "bob" || secrets[0].Password != "pw2" {
-		t.Fatalf("username update: got %+v", secrets[0])
+	applyProfileFields(secrets, 0, "otherprovider", "bob", "")
+	if secrets[0].Provider != "otherprovider" || secrets[0].Username != "bob" || secrets[0].Password != "pw2" {
+		t.Fatalf("provider+username update: got %+v", secrets[0])
 	}
 }
 
+// TestRunProfileAddFromEnv also covers finding: "add" must verify the
+// credentials via a real login attempt (here, the stub) before saving, and
+// default the provider to "evn" when -provider isn't given.
 func TestRunProfileAddFromEnv(t *testing.T) {
 	isolateConfigDir(t)
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 
 	var stdout, stderr bytes.Buffer
 	if got := runProfile([]string{"add", "main"}, &stdout, &stderr); got != 0 {
@@ -81,7 +85,7 @@ func TestRunProfileAddFromEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	secrets, err := config.LoadSecrets(dir, []byte("pp"))
-	if err != nil || len(secrets) != 1 || secrets[0].Username != "alice" || secrets[0].Password != "pw1" {
+	if err != nil || len(secrets) != 1 || secrets[0].Provider != "evn" || secrets[0].Username != "alice" || secrets[0].Password != "pw1" {
 		t.Fatalf("secrets = %+v, err = %v", secrets, err)
 	}
 }
@@ -91,11 +95,49 @@ func TestRunProfileAddDuplicateRejected(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 	if got := runProfile([]string{"add", "main"}, &stdout, &stderr); got != 1 {
 		t.Fatalf("duplicate runProfile(add) = %d, want 1", got)
+	}
+}
+
+// TestRunProfileAddLoginFailureNotSaved covers finding: a rejected login
+// (e.g. wrong password) must abort before writing anything to credentials.enc.
+func TestRunProfileAddLoginFailureNotSaved(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "wrong")
+	withStubProvider(t, &stubProvider{err: errStub})
+
+	var stdout, stderr bytes.Buffer
+	if got := runProfile([]string{"add", "main"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(add) with rejected login = %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "login to evn failed") {
+		t.Errorf("stderr = %q, want login-failed message", stderr.String())
+	}
+	dir, _ := config.Dir()
+	if config.CredentialsExist(dir) {
+		t.Fatal("credentials.enc should not exist after a rejected login")
+	}
+}
+
+func TestRunProfileAddUnknownProvider(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+
+	var stdout, stderr bytes.Buffer
+	if got := runProfile([]string{"add", "main", "-provider", "bogus"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(add -provider bogus) = %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), `unknown provider "bogus"`) {
+		t.Errorf("stderr = %q, want unknown provider message", stderr.String())
 	}
 }
 
@@ -114,6 +156,7 @@ func TestRunProfileListAfterAdd(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -121,8 +164,8 @@ func TestRunProfileListAfterAdd(t *testing.T) {
 	if got := runProfile([]string{"list"}, &stdout, &stderr); got != 0 {
 		t.Fatalf("runProfile(list) = %d, want 0", got)
 	}
-	if !strings.Contains(stdout.String(), "main\talice") {
-		t.Fatalf("stdout = %q, want profile listed", stdout.String())
+	if !strings.Contains(stdout.String(), "main\tevn\talice") {
+		t.Fatalf("stdout = %q, want profile listed with provider", stdout.String())
 	}
 }
 
@@ -131,6 +174,7 @@ func TestRunProfileUpdateUsernameBlankKeepsCurrent(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -142,8 +186,32 @@ func TestRunProfileUpdateUsernameBlankKeepsCurrent(t *testing.T) {
 	}
 	dir, _ := config.Dir()
 	secrets, err := config.LoadSecrets(dir, []byte("pp"))
-	if err != nil || len(secrets) != 1 || secrets[0].Username != "alice" || secrets[0].Password != "pw2" {
+	if err != nil || len(secrets) != 1 || secrets[0].Provider != "evn" || secrets[0].Username != "alice" || secrets[0].Password != "pw2" {
 		t.Fatalf("secrets = %+v, err = %v", secrets, err)
+	}
+}
+
+// TestRunProfileUpdateLoginFailureNotSaved covers finding: "update" must
+// re-verify the resulting (possibly merged) credentials before persisting,
+// leaving the previously-stored profile untouched on failure.
+func TestRunProfileUpdateLoginFailureNotSaved(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+
+	t.Setenv("SMARTMETER_PASSWORD", "wrong")
+	withStubProvider(t, &stubProvider{err: errStub})
+	if got := runProfile([]string{"update", "main"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(update) with rejected login = %d, want 1", got)
+	}
+	dir, _ := config.Dir()
+	secrets, err := config.LoadSecrets(dir, []byte("pp"))
+	if err != nil || len(secrets) != 1 || secrets[0].Password != "pw1" {
+		t.Fatalf("secrets should be unchanged: %+v, err = %v", secrets, err)
 	}
 }
 
@@ -161,6 +229,7 @@ func TestRunProfileRemove(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -220,6 +289,7 @@ func TestRunProfileAddWrongPassphrase(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "right")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -253,6 +323,7 @@ func TestRunProfileUpdateWrongPassphrase(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "right")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -267,6 +338,7 @@ func TestRunProfileUpdateNotFoundWithCredentials(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -280,6 +352,7 @@ func TestRunProfileListWrongPassphrase(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "right")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 
@@ -301,6 +374,7 @@ func TestRunProfileRemoveNotFoundAmongExisting(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var stdout, stderr bytes.Buffer
 	runProfile([]string{"add", "main"}, &stdout, &stderr)
 	t.Setenv("SMARTMETER_USER", "bob")

@@ -12,8 +12,8 @@ func TestSecretsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	pass := []byte("hunter2")
 	profiles := []Profile{
-		{Name: "main", Username: "alice", Password: "pw-a"},
-		{Name: "second", Username: "bob", Password: "pw-b"},
+		{Name: "main", Provider: "evn", Username: "alice", Password: "pw-a"},
+		{Name: "second", Provider: "evn", Username: "bob", Password: "pw-b"},
 	}
 	if err := SaveSecrets(dir, pass, profiles); err != nil {
 		t.Fatal(err)

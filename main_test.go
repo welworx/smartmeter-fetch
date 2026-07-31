@@ -142,6 +142,7 @@ func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var addOut, addErr bytes.Buffer
 	if code := runProfile([]string{"add", "main"}, &addOut, &addErr); code != 0 {
 		t.Fatalf("runProfile(add) = %d, stderr = %s", code, addErr.String())
@@ -169,6 +170,7 @@ func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
 func TestRun_Fetch_ProfileFlagSelectsNamedProfile(t *testing.T) {
 	isolateConfigDir(t)
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{})
 	var addOut, addErr bytes.Buffer
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
@@ -180,7 +182,6 @@ func TestRun_Fetch_ProfileFlagSelectsNamedProfile(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSWORD", "")
 
 	var got []string
-	withStubProvider(t, &stubProvider{})
 	orig := providerFactories["evn"]
 	providerFactories["evn"] = func(user, password, userAgent string, logger *slog.Logger) provider.Provider {
 		got = []string{user, password}
@@ -203,6 +204,7 @@ func TestRun_Fetch_UnknownProfile(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
 	t.Setenv("SMARTMETER_USER", "alice")
 	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
 	var addOut, addErr bytes.Buffer
 	runProfile([]string{"add", "main"}, &addOut, &addErr)
 	t.Setenv("SMARTMETER_USER", "")

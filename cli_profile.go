@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -50,7 +51,7 @@ func promptLine(prompt string) (string, error) {
 	return strings.TrimSpace(line), err
 }
 
-func profileAdd(dir, name, username, password string) error {
+func profileAdd(dir, name, providerName, username, password string) error {
 	pass, err := readPassphrase(!config.CredentialsExist(dir))
 	if err != nil {
 		return err
@@ -64,19 +65,52 @@ func profileAdd(dir, name, username, password string) error {
 			return fmt.Errorf("profile %q already exists", name)
 		}
 	}
-	secrets = append(secrets, config.Profile{Name: name, Username: username, Password: password})
+	secrets = append(secrets, config.Profile{Name: name, Provider: providerName, Username: username, Password: password})
 	return config.SaveSecrets(dir, pass, secrets)
 }
 
-// applyProfileFields mutates secrets[idx], applying username/password where
-// non-empty (each "" means "leave unchanged").
-func applyProfileFields(secrets []config.Profile, idx int, username, password string) {
+// applyProfileFields mutates secrets[idx], applying provider/username/
+// password where non-empty (each "" means "leave unchanged").
+func applyProfileFields(secrets []config.Profile, idx int, providerName, username, password string) {
+	if providerName != "" {
+		secrets[idx].Provider = providerName
+	}
 	if username != "" {
 		secrets[idx].Username = username
 	}
 	if password != "" {
 		secrets[idx].Password = password
 	}
+}
+
+// testLogin verifies username/password against providerName's portal by
+// actually logging in (ListPoints forces a login internally). Used by
+// "profile add"/"profile update" so a typo'd password is never silently
+// stored.
+func testLogin(ctx context.Context, providerName, username, password string) error {
+	factory, ok := providerFactories[providerName]
+	if !ok {
+		return fmt.Errorf("unknown provider %q (only \"evn\" is supported)", providerName)
+	}
+	if _, err := factory(username, password, "", nil).ListPoints(ctx); err != nil {
+		return fmt.Errorf("login to %s failed, not saving: %w", providerName, err)
+	}
+	return nil
+}
+
+// parseNameProviderArgs validates the arg shape shared by `add`/`update`:
+// [name] or [name, "-provider", value]. Returns the provider override ("" if
+// none given) and whether args matched one of those two shapes.
+func parseNameProviderArgs(args []string) (providerName string, ok bool) {
+	switch len(args) {
+	case 2:
+		return "", true
+	case 4:
+		if args[2] == "-provider" {
+			return args[3], true
+		}
+	}
+	return "", false
 }
 
 func profileRemove(dir, name string) error {
@@ -137,14 +171,15 @@ func profileChangePassphrase(dir string) error {
 }
 
 func printProfileUsage(w io.Writer) {
-	fmt.Fprint(w, `Manage stored portal credentials (credentials.enc).
+	fmt.Fprint(w, `Manage stored portal credentials (credentials.enc). "add"/"update" verify
+the username/password by logging into the portal before saving.
 
 Usage:
-  smartmeter-fetch profile add <name>       add a profile (prompts for username/password)
-  smartmeter-fetch profile list             list configured profile names/usernames
-  smartmeter-fetch profile update <name>    change a profile's username/password (blank keeps current)
-  smartmeter-fetch profile remove <name>    remove a profile
-  smartmeter-fetch profile passphrase       change the master passphrase (re-encrypts everything)
+  smartmeter-fetch profile add <name> [-provider evn]      add a profile (prompts for username/password)
+  smartmeter-fetch profile list                            list configured profiles (name, provider, username)
+  smartmeter-fetch profile update <name> [-provider evn]   change a profile's provider/username/password (blank keeps current)
+  smartmeter-fetch profile remove <name>                   remove a profile
+  smartmeter-fetch profile passphrase                      change the master passphrase (re-encrypts everything)
 `)
 }
 
@@ -161,10 +196,12 @@ func runProfile(args []string, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "add":
-		if len(args) != 2 {
+		providerName, ok := parseNameProviderArgs(args)
+		if !ok {
 			printProfileUsage(stderr)
 			return 2
 		}
+		providerName = providerOrDefault(providerName)
 		name := args[1]
 		username := os.Getenv("SMARTMETER_USER")
 		if username == "" {
@@ -183,14 +220,19 @@ func runProfile(args []string, stdout, stderr io.Writer) int {
 			}
 			password = string(pw)
 		}
-		if err := profileAdd(dir, name, username, password); err != nil {
+		if err := testLogin(context.Background(), providerName, username, password); err != nil {
 			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "profile", name, "added")
+		if err := profileAdd(dir, name, providerName, username, password); err != nil {
+			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "profile", name, "added (login verified)")
 		return 0
 	case "update":
-		if len(args) != 2 {
+		providerName, ok := parseNameProviderArgs(args)
+		if !ok {
 			printProfileUsage(stderr)
 			return 2
 		}
@@ -237,12 +279,16 @@ func runProfile(args []string, stdout, stderr io.Writer) int {
 			}
 			password = string(pw)
 		}
-		applyProfileFields(secrets, idx, username, password)
+		applyProfileFields(secrets, idx, providerName, username, password)
+		if err := testLogin(context.Background(), providerOrDefault(secrets[idx].Provider), secrets[idx].Username, secrets[idx].Password); err != nil {
+			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
+			return 1
+		}
 		if err := config.SaveSecrets(dir, pass, secrets); err != nil {
 			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "profile", name, "updated")
+		fmt.Fprintln(stdout, "profile", name, "updated (login verified)")
 		return 0
 	case "list":
 		if len(args) != 1 {
@@ -263,7 +309,7 @@ func runProfile(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		for _, p := range secrets {
-			fmt.Fprintf(stdout, "%s\t%s\n", p.Name, p.Username)
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", p.Name, providerOrDefault(p.Provider), p.Username)
 		}
 		return 0
 	case "remove":
