@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"time"
 
 	_ "time/tzdata"
@@ -79,4 +81,52 @@ func (p *Provider) login(ctx context.Context) error {
 	}
 	p.loggedIn = true
 	return nil
+}
+
+func (p *Provider) get(ctx context.Context, path string, query url.Values) ([]byte, error) {
+	if !p.loggedIn {
+		if err := p.login(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	body, status, err := p.doGet(ctx, path, query)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized {
+		if err := p.login(ctx); err != nil {
+			return nil, err
+		}
+		body, status, err = p.doGet(ctx, path, query)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("evn: GET %s failed with status %d", path, status)
+	}
+	return body, nil
+}
+
+func (p *Provider) doGet(ctx context.Context, path string, query url.Values) ([]byte, int, error) {
+	u := p.baseURL + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("evn: building request for %s: %w", path, err)
+	}
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("evn: request %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("evn: reading response for %s: %w", path, err)
+	}
+	return b, resp.StatusCode, nil
 }
