@@ -168,8 +168,14 @@ func getPoint(ctx context.Context, p provider.Provider, st store.Store, plan fet
 	if err != nil {
 		return pointOutput{}, fmt.Errorf("resolving days for %s: %w", pt.ID, err)
 	}
-	if _, err := fetchPointDays(ctx, p, st, plan, force, profileLabel, pt.ID, pt.Name, log); err != nil {
+	results, err := fetchPointDays(ctx, p, st, plan, force, profileLabel, pt.ID, pt.Name, log)
+	if err != nil {
 		return pointOutput{}, err
+	}
+	for _, r := range results {
+		if r.Error != "" {
+			return pointOutput{}, fmt.Errorf("fetching %s: %s", pt.ID, r.Error)
+		}
 	}
 
 	from := days[0]

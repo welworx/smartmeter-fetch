@@ -156,6 +156,25 @@ func TestRun_Get_ForcePassesThroughToRefetch(t *testing.T) {
 	}
 }
 
+func TestRun_Get_FetchFailureDoesNotReturnStaleData(t *testing.T) {
+	withStubProvider(t, &stubProvider{err: errStub})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	dataDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "-point", "AT001", "-day", "2024-01-15", "-data-dir", dataDir}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("run(get, fetch error) = 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("stderr = %q, want a structured error log line", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (no stale/empty data on fetch failure)", stdout.String())
+	}
+}
+
 func TestRun_Get_UnrecognizedSampleErrors(t *testing.T) {
 	withStubProvider(t, &stubProvider{})
 	t.Setenv("SMARTMETER_USER", "u")
