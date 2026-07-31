@@ -21,7 +21,7 @@ import (
 
 var version = "dev"
 
-const usage = `smartmeter-fetch fetches quarter-hourly smart meter readings from grid
+const usageHeader = `smartmeter-fetch fetches quarter-hourly smart meter readings from grid
 operator web portals.
 
 Usage:
@@ -32,13 +32,45 @@ Commands:
   fetch         Fetch one day's readings for a metering point
   version       Print version and exit
   help          Print this message
-
-Run "smartmeter-fetch <command> -h" for flags on a specific command.
-
-Credentials can be passed via -user/-password flags or the SMARTMETER_USER /
-SMARTMETER_PASSWORD environment variables (preferred — keeps them out of
-your shell history and process list).
 `
+
+const usageFooter = `
+Environment variables:
+  SMARTMETER_USER       Portal username. Same as -user; -user wins if both are set.
+  SMARTMETER_PASSWORD   Portal password. Same as -password; -password wins if both are set.
+
+Examples:
+  # Credentials via env vars (recommended: keeps them out of shell history)
+  export SMARTMETER_USER=you@example.com
+  export SMARTMETER_PASSWORD=hunter2
+  smartmeter-fetch list-points
+
+  # Fetch one day's readings, with verbose logging (auth events + request URLs)
+  smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -v
+
+  # Override the User-Agent sent to the portal
+  smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
+`
+
+// printUsage writes the full help text: commands, every flag on every
+// subcommand with its default, the environment variables that affect
+// behavior, and usage examples. This is the single source of truth for
+// help output — "smartmeter-fetch help", "-h"/"--help", a bare invocation,
+// and an unknown command all print it, so it can never drift out of sync
+// with the flags actually registered below.
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, usageHeader)
+
+	fmt.Fprint(w, "\nlist-points flags:\n")
+	lpFS, _ := newListPointsFlagSet(w)
+	lpFS.PrintDefaults()
+
+	fmt.Fprint(w, "\nfetch flags:\n")
+	fFS, _, _, _ := newFetchFlagSet(w)
+	fFS.PrintDefaults()
+
+	fmt.Fprint(w, usageFooter)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -46,14 +78,14 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		printUsage(stderr)
 		return 2
 	}
 
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usage)
+		printUsage(stdout)
 		return 0
 	case "version":
 		fmt.Fprintf(stdout, "smartmeter-fetch %s\n", version)
@@ -64,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runFetch(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "smartmeter-fetch: unknown command %q\n\n", cmd)
-		fmt.Fprint(stderr, usage)
+		printUsage(stderr)
 		return 2
 	}
 }
@@ -121,15 +153,23 @@ func newLogger(verbose bool, w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
 }
 
-func runListPoints(args []string, stdout, stderr io.Writer) int {
+// newListPointsFlagSet builds the "list-points" flag set. Shared between
+// runListPoints (which parses real args) and printUsage (which only wants
+// the flag list), so the two can never fall out of sync.
+func newListPointsFlagSet(out io.Writer) (*flag.FlagSet, *providerFlags) {
 	fs := flag.NewFlagSet("list-points", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(out)
 	var c providerFlags
 	c.register(fs)
 	fs.Usage = func() {
-		fmt.Fprint(stderr, "List metering points visible to the account.\n\nUsage:\n  smartmeter-fetch list-points [flags]\n\nFlags:\n")
+		fmt.Fprint(out, "List metering points visible to the account.\n\nUsage:\n  smartmeter-fetch list-points [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
+	return fs, &c
+}
+
+func runListPoints(args []string, stdout, stderr io.Writer) int {
+	fs, c := newListPointsFlagSet(stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitCodeForParseErr(err)
 	}
@@ -152,17 +192,25 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 	return printJSON(stdout, stderr, points)
 }
 
-func runFetch(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var c providerFlags
+// newFetchFlagSet builds the "fetch" flag set. Shared between runFetch
+// (which parses real args) and printUsage (which only wants the flag
+// list), so the two can never fall out of sync.
+func newFetchFlagSet(out io.Writer) (fs *flag.FlagSet, c *providerFlags, point, day *string) {
+	fs = flag.NewFlagSet("fetch", flag.ContinueOnError)
+	fs.SetOutput(out)
+	c = &providerFlags{}
 	c.register(fs)
-	point := fs.String("point", "", "metering point ID (required, see list-points)")
-	day := fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
+	point = fs.String("point", "", "metering point ID (required, see list-points)")
+	day = fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
 	fs.Usage = func() {
-		fmt.Fprint(stderr, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch -point <id> -day <YYYY-MM-DD> [flags]\n\nFlags:\n")
+		fmt.Fprint(out, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch -point <id> -day <YYYY-MM-DD> [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
+	return fs, c, point, day
+}
+
+func runFetch(args []string, stdout, stderr io.Writer) int {
+	fs, c, point, day := newFetchFlagSet(stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitCodeForParseErr(err)
 	}

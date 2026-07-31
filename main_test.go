@@ -60,8 +60,45 @@ func TestRun_Help(t *testing.T) {
 	if code := run([]string{"help"}, &stdout, &stderr); code != 0 {
 		t.Errorf("run(help) = %d, want 0", code)
 	}
-	if !strings.Contains(stdout.String(), "Usage:") {
-		t.Errorf("stdout = %q, want usage message", stdout.String())
+	out := stdout.String()
+
+	// Every flag from both subcommands, with its default, must be present —
+	// this is what makes help self-updating instead of hand-copied prose
+	// that can drift from the real flags.
+	for _, want := range []string{
+		"-provider", `default "evn"`,
+		"-user", "-password", "-user-agent", "-v", "-verbose",
+		"-point", "-day",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help output missing %q\n---\n%s", want, out)
+		}
+	}
+
+	// Every env var that influences behavior.
+	for _, want := range []string{"SMARTMETER_USER", "SMARTMETER_PASSWORD"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help output missing env var %q\n---\n%s", want, out)
+		}
+	}
+
+	if !strings.Contains(out, "Examples:") {
+		t.Errorf("help output missing an Examples section\n---\n%s", out)
+	}
+}
+
+func TestRun_Help_MatchesNoArgsAndUnknownCommand(t *testing.T) {
+	var helpOut, noArgsOut, unknownOut bytes.Buffer
+	var discard bytes.Buffer
+	run([]string{"help"}, &helpOut, &discard)
+	run(nil, &discard, &noArgsOut)
+	run([]string{"bogus"}, &discard, &unknownOut)
+
+	if !strings.Contains(noArgsOut.String(), "Examples:") {
+		t.Errorf("no-args output missing Examples section (should reuse printUsage): %s", noArgsOut.String())
+	}
+	if !strings.Contains(unknownOut.String(), "Examples:") {
+		t.Errorf("unknown-command output missing Examples section (should reuse printUsage): %s", unknownOut.String())
 	}
 }
 
