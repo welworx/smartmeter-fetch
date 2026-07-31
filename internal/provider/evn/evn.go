@@ -228,6 +228,7 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 	if err != nil {
 		return nil, err
 	}
+	p.debug("evn: day records raw response", "body", string(body))
 
 	var records []dayRecord
 	if err := json.Unmarshal(body, &records); err != nil {
