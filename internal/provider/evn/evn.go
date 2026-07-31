@@ -136,46 +136,38 @@ func (p *Provider) doGet(ctx context.Context, path string, query url.Values) ([]
 	return b, resp.StatusCode, nil
 }
 
-type account struct {
-	AccountID        string `json:"accountId"`
-	HasSmartMeter    bool   `json:"hasSmartMeter"`
-	HasElectricity   bool   `json:"hasElectricity"`
-	HasCommunicative bool   `json:"hasCommunicative"`
-	HasActive        bool   `json:"hasActive"`
-}
-
 type meteringPoint struct {
 	MeteringPointID string `json:"meteringPointId"`
 	TypeOfRelation  string `json:"typeOfRelation"`
+	Communicative   bool   `json:"communicative"`
+	Locked          bool   `json:"locked"`
 }
+
+// meteringPointContexts are the two "context" values the portal's own web
+// UI queries for a business partner's metering points. In practice both
+// have been observed to return the same set of points for a single-account
+// user; querying both and deduplicating is the safe interpretation without
+// documentation of what distinguishes them.
+var meteringPointContexts = [...]string{"2", "5"}
 
 // ListPoints implements provider.Provider.
 func (p *Provider) ListPoints(ctx context.Context) ([]provider.Point, error) {
-	body, err := p.get(ctx, "/orchestration/User/GetAccountIdByBussinespartnerId", url.Values{"context": {"2"}})
-	if err != nil {
-		return nil, err
-	}
-	var accounts []account
-	if err := json.Unmarshal(body, &accounts); err != nil {
-		return nil, fmt.Errorf("evn: decoding accounts: %w", err)
-	}
-
+	seen := make(map[string]bool)
 	var points []provider.Point
-	for _, acc := range accounts {
-		if acc.AccountID == "" || !acc.HasSmartMeter || !acc.HasElectricity || !acc.HasCommunicative || !acc.HasActive {
-			continue
-		}
-
-		body, err := p.get(ctx, "/orchestration/User/GetMeteringPointByAccountId",
-			url.Values{"context": {"2"}, "accountId": {acc.AccountID}})
+	for _, ctxVal := range meteringPointContexts {
+		body, err := p.get(ctx, "/orchestration/User/GetMeteringPointsByBusinesspartnerId", url.Values{"context": {ctxVal}})
 		if err != nil {
 			return nil, err
 		}
 		var meters []meteringPoint
 		if err := json.Unmarshal(body, &meters); err != nil {
-			return nil, fmt.Errorf("evn: decoding metering points for account %s: %w", acc.AccountID, err)
+			return nil, fmt.Errorf("evn: decoding metering points for context %s: %w", ctxVal, err)
 		}
 		for _, m := range meters {
+			if m.MeteringPointID == "" || m.Locked || !m.Communicative || seen[m.MeteringPointID] {
+				continue
+			}
+			seen[m.MeteringPointID] = true
 			points = append(points, provider.Point{ID: m.MeteringPointID, Name: m.TypeOfRelation})
 		}
 	}

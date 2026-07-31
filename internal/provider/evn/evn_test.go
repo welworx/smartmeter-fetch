@@ -152,20 +152,18 @@ func TestProvider_Get_ErrorsOnPersistentFailure(t *testing.T) {
 
 func TestProvider_ListPoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/orchestration/Authentication/Login":
+		switch {
+		case r.URL.Path == "/orchestration/Authentication/Login":
 			w.WriteHeader(http.StatusOK)
-		case "/orchestration/User/GetAccountIdByBussinespartnerId":
+		case r.URL.Path == "/orchestration/User/GetMeteringPointsByBusinesspartnerId" && r.URL.Query().Get("context") == "2":
 			w.Write([]byte(`[
-				{"accountId": "acc-eligible", "hasSmartMeter": true, "hasElectricity": true, "hasCommunicative": true, "hasActive": true},
-				{"accountId": "acc-ineligible", "hasSmartMeter": false, "hasElectricity": true, "hasCommunicative": true, "hasActive": true}
+				{"meteringPointId": "AT0020000000000000000000100123456", "typeOfRelation": "Bezug", "communicative": true, "locked": false},
+				{"meteringPointId": "AT0020000000000000000000100654321", "typeOfRelation": "Einspeisung", "communicative": false, "locked": false},
+				{"meteringPointId": "AT0020000000000000000000100999999", "typeOfRelation": "Bezug", "communicative": true, "locked": true}
 			]`))
-		case "/orchestration/User/GetMeteringPointByAccountId":
-			if got := r.URL.Query().Get("accountId"); got != "acc-eligible" {
-				t.Fatalf("GetMeteringPointByAccountId called for accountId = %q, want acc-eligible", got)
-			}
+		case r.URL.Path == "/orchestration/User/GetMeteringPointsByBusinesspartnerId" && r.URL.Query().Get("context") == "5":
 			w.Write([]byte(`[
-				{"meteringPointId": "AT0020000000000000000000100123456", "typeOfRelation": "Verbrauch"}
+				{"meteringPointId": "AT0020000000000000000000100123456", "typeOfRelation": "Bezug", "communicative": true, "locked": false}
 			]`))
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -181,10 +179,10 @@ func TestProvider_ListPoints(t *testing.T) {
 		t.Fatalf("ListPoints() error = %v", err)
 	}
 	want := []provider.Point{
-		{ID: "AT0020000000000000000000100123456", Name: "Verbrauch"},
+		{ID: "AT0020000000000000000000100123456", Name: "Bezug"},
 	}
 	if len(points) != len(want) || points[0] != want[0] {
-		t.Errorf("ListPoints() = %+v, want %+v", points, want)
+		t.Errorf("ListPoints() = %+v, want %+v (non-communicative and locked points excluded; duplicate across contexts deduplicated)", points, want)
 	}
 }
 
