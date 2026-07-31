@@ -70,30 +70,39 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // providerFlags registers the flags every provider-talking subcommand
-// shares: which provider, credentials, and verbosity.
+// shares: which provider, credentials, User-Agent, and verbosity.
 type providerFlags struct {
-	name     string
-	user     string
-	password string
-	verbose  bool
+	name      string
+	user      string
+	password  string
+	userAgent string
+	verbose   bool
 }
 
 func (c *providerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.name, "provider", "evn", "grid operator provider (only \"evn\" is currently supported)")
 	fs.StringVar(&c.user, "user", os.Getenv("SMARTMETER_USER"), "portal username (default: $SMARTMETER_USER)")
 	fs.StringVar(&c.password, "password", os.Getenv("SMARTMETER_PASSWORD"), "portal password (default: $SMARTMETER_PASSWORD)")
-	fs.BoolVar(&c.verbose, "v", false, "verbose (debug) logging")
-	fs.BoolVar(&c.verbose, "verbose", false, "verbose (debug) logging")
+	fs.StringVar(&c.userAgent, "user-agent", "", "User-Agent header sent to the portal (default: a browser-like UA; some portals reject Go's default)")
+	fs.BoolVar(&c.verbose, "v", false, "verbose (debug) logging: request URLs and auth events")
+	fs.BoolVar(&c.verbose, "verbose", false, "verbose (debug) logging: request URLs and auth events")
 }
 
 // providerFactories maps a -provider name to its constructor. A map keeps
 // selection and construction in one place and gives tests a seam to inject
 // a fake provider without reaching into evn's unexported internals.
-var providerFactories = map[string]func(user, password string) provider.Provider{
-	"evn": func(user, password string) provider.Provider { return evn.New(user, password) },
+var providerFactories = map[string]func(user, password, userAgent string, logger *slog.Logger) provider.Provider{
+	"evn": func(user, password, userAgent string, logger *slog.Logger) provider.Provider {
+		p := evn.New(user, password)
+		p.Logger = logger
+		if userAgent != "" {
+			p.UserAgent = userAgent
+		}
+		return p
+	},
 }
 
-func (c *providerFlags) newProvider() (provider.Provider, error) {
+func (c *providerFlags) newProvider(logger *slog.Logger) (provider.Provider, error) {
 	if c.user == "" || c.password == "" {
 		return nil, errors.New("missing credentials: pass -user/-password or set SMARTMETER_USER/SMARTMETER_PASSWORD")
 	}
@@ -101,7 +110,7 @@ func (c *providerFlags) newProvider() (provider.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", c.name)
 	}
-	return factory(c.user, c.password), nil
+	return factory(c.user, c.password, c.userAgent, logger), nil
 }
 
 func newLogger(verbose bool, w io.Writer) *slog.Logger {
@@ -126,7 +135,7 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 	}
 
 	log := newLogger(c.verbose, stderr)
-	p, err := c.newProvider()
+	p, err := c.newProvider(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
 		return 2
@@ -171,7 +180,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	}
 
 	log := newLogger(c.verbose, stderr)
-	p, err := c.newProvider()
+	p, err := c.newProvider(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
 		return 2

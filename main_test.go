@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func (s *stubProvider) FetchDay(ctx context.Context, pointID string, day time.Ti
 func withStubProvider(t *testing.T, stub *stubProvider) {
 	t.Helper()
 	orig := providerFactories["evn"]
-	providerFactories["evn"] = func(user, password string) provider.Provider { return stub }
+	providerFactories["evn"] = func(user, password, userAgent string, logger *slog.Logger) provider.Provider { return stub }
 	t.Cleanup(func() { providerFactories["evn"] = orig })
 }
 
