@@ -282,7 +282,8 @@ func TestProvider_FetchDay(t *testing.T) {
 				{
 					"ec_id": null,
 					"meteredValues": [1.0, null, null],
-					"estimatedValues": [null, 2.0, null]
+					"estimatedValues": [null, 2.0, null],
+					"estimatedQualities": [null, "L3", null]
 				}
 			]`))
 		default:
@@ -313,6 +314,9 @@ func TestProvider_FetchDay(t *testing.T) {
 	if readings[0].Value != 1000 {
 		t.Errorf("readings[0].Value = %v, want 1000 (1.0 kWh metered)", readings[0].Value)
 	}
+	if readings[0].Quality != "L1" {
+		t.Errorf("readings[0].Quality = %q, want L1 (measured)", readings[0].Quality)
+	}
 
 	wantSecond := wantFirst.Add(15 * time.Minute)
 	if !readings[1].Timestamp.Equal(wantSecond) {
@@ -320,6 +324,9 @@ func TestProvider_FetchDay(t *testing.T) {
 	}
 	if readings[1].Value != 2000 {
 		t.Errorf("readings[1].Value = %v, want 2000 (2.0 kWh estimated fallback)", readings[1].Value)
+	}
+	if readings[1].Quality != "L3" {
+		t.Errorf("readings[1].Quality = %q, want L3 (from estimatedQualities)", readings[1].Quality)
 	}
 }
 
@@ -407,6 +414,9 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 	if readings[2].Value != 3000 {
 		t.Errorf("readings[2].Value = %v, want 3000 (estimated fallback beyond metered length)", readings[2].Value)
 	}
+	if readings[2].Quality != "" {
+		t.Errorf("readings[2].Quality = %q, want empty (no estimatedQualities in response)", readings[2].Quality)
+	}
 
 	// Index 3: estimated only 4.0 kWh
 	want3 := wantBase.Add(45 * time.Minute)
@@ -437,8 +447,8 @@ func TestProvider_FetchDay_DSTFallBack(t *testing.T) {
 			}
 			resp := []dayRecord{
 				{
-					ECID:          nil,
-					MeteredValues: meteredValues,
+					ECID:    nil,
+					Metered: meteredValues,
 				},
 			}
 			b, _ := json.Marshal(resp)

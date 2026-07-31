@@ -20,6 +20,11 @@ type Reading struct {
 	// Timestamp is the start of the interval, in UTC.
 	Timestamp time.Time `json:"timestamp"`
 	Value     float64   `json:"value"`
+	// Quality is the portal's data-quality code for this interval: "L1"
+	// (measured, final), "L2" (substitute, final) or "L3" (substitute,
+	// provisional - the value may still change; see CLAUDE.md's
+	// delayed-data note). Empty if the provider doesn't report quality.
+	Quality string `json:"quality,omitempty"`
 }
 
 // Unit is the unit of measurement of every Reading.Value, for every
