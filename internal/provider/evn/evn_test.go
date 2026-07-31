@@ -270,3 +270,76 @@ func TestProvider_FetchDay_NoTotalRecord(t *testing.T) {
 		t.Fatal("FetchDay() error = nil, want error when no ec_id:null record is present")
 	}
 }
+
+func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/orchestration/ConsumptionRecord/Day":
+			// MeteredValues: [1.0, 2.0], EstimatedValues: [null, null, 3.0, 4.0]
+			// Index 0,1: metered wins. Index 2,3: only estimated.
+			w.Write([]byte(`[
+				{
+					"ec_id": null,
+					"meteredValues": [1.0, 2.0],
+					"estimatedValues": [null, null, 3.0, 4.0]
+				}
+			]`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	day := time.Date(2024, time.January, 15, 0, 0, 0, 0, time.UTC)
+	readings, err := p.FetchDay(context.Background(), "some-point", day)
+	if err != nil {
+		t.Fatalf("FetchDay() error = %v", err)
+	}
+
+	if len(readings) != 4 {
+		t.Fatalf("FetchDay() returned %d readings, want 4 (includes estimated-only intervals)", len(readings))
+	}
+
+	// Vienna is UTC+1 in January: local midnight 2024-01-15T00:00 CET = 2024-01-14T23:00:00Z
+	wantBase := time.Date(2024, time.January, 14, 23, 0, 0, 0, time.UTC)
+
+	// Index 0: metered 1.0 kWh
+	if !readings[0].Timestamp.Equal(wantBase) {
+		t.Errorf("readings[0].Timestamp = %v, want %v", readings[0].Timestamp, wantBase)
+	}
+	if readings[0].ValueWh != 1000 {
+		t.Errorf("readings[0].ValueWh = %v, want 1000", readings[0].ValueWh)
+	}
+
+	// Index 1: metered 2.0 kWh
+	want1 := wantBase.Add(15 * time.Minute)
+	if !readings[1].Timestamp.Equal(want1) {
+		t.Errorf("readings[1].Timestamp = %v, want %v", readings[1].Timestamp, want1)
+	}
+	if readings[1].ValueWh != 2000 {
+		t.Errorf("readings[1].ValueWh = %v, want 2000", readings[1].ValueWh)
+	}
+
+	// Index 2: estimated only (metered is nil) 3.0 kWh
+	want2 := wantBase.Add(30 * time.Minute)
+	if !readings[2].Timestamp.Equal(want2) {
+		t.Errorf("readings[2].Timestamp = %v, want %v", readings[2].Timestamp, want2)
+	}
+	if readings[2].ValueWh != 3000 {
+		t.Errorf("readings[2].ValueWh = %v, want 3000 (estimated fallback beyond metered length)", readings[2].ValueWh)
+	}
+
+	// Index 3: estimated only 4.0 kWh
+	want3 := wantBase.Add(45 * time.Minute)
+	if !readings[3].Timestamp.Equal(want3) {
+		t.Errorf("readings[3].Timestamp = %v, want %v", readings[3].Timestamp, want3)
+	}
+	if readings[3].ValueWh != 4000 {
+		t.Errorf("readings[3].ValueWh = %v, want 4000", readings[3].ValueWh)
+	}
+}

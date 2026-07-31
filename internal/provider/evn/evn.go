@@ -212,9 +212,16 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 	}
 
 	midnight := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, viennaLocation)
-	readings := make([]provider.Reading, 0, len(total.MeteredValues))
-	for i, metered := range total.MeteredValues {
-		value := metered
+	maxLen := len(total.MeteredValues)
+	if len(total.EstimatedValues) > maxLen {
+		maxLen = len(total.EstimatedValues)
+	}
+	readings := make([]provider.Reading, 0, maxLen)
+	for i := 0; i < maxLen; i++ {
+		var value *float64
+		if i < len(total.MeteredValues) {
+			value = total.MeteredValues[i]
+		}
 		if value == nil && i < len(total.EstimatedValues) {
 			value = total.EstimatedValues[i]
 		}
