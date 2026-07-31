@@ -35,6 +35,8 @@ Commands:
   list-points   List metering points visible to the account
   fetch         Fetch and persist readings (default: yesterday, every point
                 of every configured profile)
+  get           Get readings, fetching first if needed (formats: text/json/csv,
+                aggregation: -sample, export: -out)
   profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
   version       Print version and exit
   help          Print this message
@@ -105,7 +107,7 @@ Examples:
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, usageHeader)
 
-	fmt.Fprint(w, "\nCommon flags (list-points, fetch):\n")
+	fmt.Fprint(w, "\nCommon flags (list-points, fetch, get):\n")
 	commonFS := flag.NewFlagSet("common", flag.ContinueOnError)
 	commonFS.SetOutput(w)
 	var c providerFlags
@@ -117,6 +119,12 @@ func printUsage(w io.Writer) {
 	fetchOnlyFS.SetOutput(w)
 	registerFetchOnlyFlags(fetchOnlyFS)
 	fetchOnlyFS.PrintDefaults()
+
+	fmt.Fprint(w, "\nget-only flags:\n")
+	getOnlyFS := flag.NewFlagSet("get-only", flag.ContinueOnError)
+	getOnlyFS.SetOutput(w)
+	registerGetFlags(getOnlyFS)
+	getOnlyFS.PrintDefaults()
 
 	fmt.Fprint(w, "\n")
 	printProfileUsage(w)
@@ -146,6 +154,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runListPoints(rest, stdout, stderr)
 	case "fetch":
 		return runFetch(rest, stdout, stderr)
+	case "get":
+		return runGet(rest, stdout, stderr)
 	case "profile":
 		return runProfile(rest, stdout, stderr)
 	default:
