@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/welworx/smartmeter-fetch/internal/config"
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 	"github.com/welworx/smartmeter-fetch/internal/provider/evn"
 )
@@ -30,20 +31,30 @@ Usage:
 Commands:
   list-points   List metering points visible to the account
   fetch         Fetch one day's readings for a metering point
+  profile       Manage stored portal credentials (add/list/update/remove/passphrase)
   version       Print version and exit
   help          Print this message
 `
 
 const usageFooter = `
 Environment variables:
-  SMARTMETER_USER       Portal username. Same as -user; -user wins if both are set.
-  SMARTMETER_PASSWORD   Portal password. Same as -password; -password wins if both are set.
+  SMARTMETER_USER         Portal username. Same as -user; -user wins if both are set.
+  SMARTMETER_PASSWORD     Portal password. Same as -password; -password wins if both are set.
+  SMARTMETER_PASSPHRASE   credentials.enc master passphrase, skips the interactive prompt
+                          (used by "profile" commands and, as a fallback, by
+                          list-points/fetch when reading a stored -profile)
+  SMARTMETER_CONFIG_DIR   Directory holding credentials.enc (default: OS config dir,
+                          e.g. ~/Library/Application Support/smartmeter-fetch on macOS)
 
 Examples:
   # Credentials via env vars (recommended: keeps them out of shell history)
   export SMARTMETER_USER=you@example.com
   export SMARTMETER_PASSWORD=hunter2
   smartmeter-fetch list-points
+
+  # Or store credentials once, encrypted under a master passphrase
+  smartmeter-fetch profile add home
+  smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15
 
   # Fetch one day's readings, with verbose logging (auth events + request URLs)
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -v
@@ -74,6 +85,9 @@ func printUsage(w io.Writer) {
 	registerFetchOnlyFlags(fetchOnlyFS)
 	fetchOnlyFS.PrintDefaults()
 
+	fmt.Fprint(w, "\n")
+	printProfileUsage(w)
+
 	fmt.Fprint(w, usageFooter)
 }
 
@@ -99,6 +113,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runListPoints(rest, stdout, stderr)
 	case "fetch":
 		return runFetch(rest, stdout, stderr)
+	case "profile":
+		return runProfile(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "smartmeter-fetch: unknown command %q\n\n", cmd)
 		printUsage(stderr)
@@ -112,6 +128,7 @@ type providerFlags struct {
 	name      string
 	user      string
 	password  string
+	profile   string
 	userAgent string
 	verbose   bool
 }
@@ -120,6 +137,7 @@ func (c *providerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.name, "provider", "evn", "grid operator provider (only \"evn\" is currently supported)")
 	fs.StringVar(&c.user, "user", os.Getenv("SMARTMETER_USER"), "portal username (default: $SMARTMETER_USER)")
 	fs.StringVar(&c.password, "password", os.Getenv("SMARTMETER_PASSWORD"), "portal password (default: $SMARTMETER_PASSWORD)")
+	fs.StringVar(&c.profile, "profile", "", "name of a stored profile to use instead of -user/-password (see: smartmeter-fetch profile add); default: first configured profile")
 	fs.StringVar(&c.userAgent, "user-agent", "", "User-Agent header sent to the portal (default: a browser-like UA; some portals reject Go's default)")
 	fs.BoolVar(&c.verbose, "v", false, "verbose (debug) logging: request URLs and auth events")
 	fs.BoolVar(&c.verbose, "verbose", false, "verbose (debug) logging: request URLs and auth events")
@@ -140,14 +158,53 @@ var providerFactories = map[string]func(user, password, userAgent string, logger
 }
 
 func (c *providerFlags) newProvider(logger *slog.Logger) (provider.Provider, error) {
-	if c.user == "" || c.password == "" {
-		return nil, errors.New("missing credentials: pass -user/-password or set SMARTMETER_USER/SMARTMETER_PASSWORD")
+	user, password, err := c.resolveCredentials()
+	if err != nil {
+		return nil, err
 	}
 	factory, ok := providerFactories[c.name]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", c.name)
 	}
-	return factory(c.user, c.password, c.userAgent, logger), nil
+	return factory(user, password, c.userAgent, logger), nil
+}
+
+// resolveCredentials returns the portal username/password to use: -user/
+// -password (which already default from $SMARTMETER_USER/$SMARTMETER_PASSWORD,
+// see register) take priority; otherwise a profile is loaded from
+// credentials.enc, selected by -profile or, if that's empty, the first
+// configured profile.
+func (c *providerFlags) resolveCredentials() (user, password string, err error) {
+	if c.user != "" && c.password != "" {
+		return c.user, c.password, nil
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		return "", "", err
+	}
+	if !config.CredentialsExist(dir) {
+		return "", "", errors.New("missing credentials: pass -user/-password, set SMARTMETER_USER/SMARTMETER_PASSWORD, or add a profile (smartmeter-fetch profile add <name>)")
+	}
+	pass, err := readPassphrase(false)
+	if err != nil {
+		return "", "", err
+	}
+	profiles, err := config.LoadSecrets(dir, pass)
+	if err != nil {
+		return "", "", err
+	}
+	if len(profiles) == 0 {
+		return "", "", errors.New("no profiles configured (run: smartmeter-fetch profile add <name>)")
+	}
+	if c.profile != "" {
+		for _, p := range profiles {
+			if p.Name == c.profile {
+				return p.Username, p.Password, nil
+			}
+		}
+		return "", "", fmt.Errorf("no profile %q (run: smartmeter-fetch profile add %s)", c.profile, c.profile)
+	}
+	return profiles[0].Username, profiles[0].Password, nil
 }
 
 func newLogger(verbose bool, w io.Writer) *slog.Logger {

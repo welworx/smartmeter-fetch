@@ -124,6 +124,7 @@ func TestRun_Fetch_MissingPoint(t *testing.T) {
 }
 
 func TestRun_Fetch_MissingCredentials(t *testing.T) {
+	isolateConfigDir(t)
 	t.Setenv("SMARTMETER_USER", "")
 	t.Setenv("SMARTMETER_PASSWORD", "")
 	var stdout, stderr bytes.Buffer
@@ -133,6 +134,87 @@ func TestRun_Fetch_MissingCredentials(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "missing credentials") {
 		t.Errorf("stderr = %q, want missing credentials message", stderr.String())
+	}
+}
+
+func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	var addOut, addErr bytes.Buffer
+	if code := runProfile([]string{"add", "main"}, &addOut, &addErr); code != 0 {
+		t.Fatalf("runProfile(add) = %d, stderr = %s", code, addErr.String())
+	}
+	t.Setenv("SMARTMETER_USER", "")
+	t.Setenv("SMARTMETER_PASSWORD", "")
+
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), ValueWh: 1000}}
+	withStubProvider(t, &stubProvider{readings: want})
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []provider.Reading
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].ValueWh != 1000 {
+		t.Errorf("readings = %+v, want %+v", got, want)
+	}
+}
+
+func TestRun_Fetch_ProfileFlagSelectsNamedProfile(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	var addOut, addErr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &addOut, &addErr)
+	t.Setenv("SMARTMETER_USER", "bob")
+	t.Setenv("SMARTMETER_PASSWORD", "pw2")
+	runProfile([]string{"add", "second"}, &addOut, &addErr)
+	t.Setenv("SMARTMETER_USER", "")
+	t.Setenv("SMARTMETER_PASSWORD", "")
+
+	var got []string
+	withStubProvider(t, &stubProvider{})
+	orig := providerFactories["evn"]
+	providerFactories["evn"] = func(user, password, userAgent string, logger *slog.Logger) provider.Provider {
+		got = []string{user, password}
+		return &stubProvider{}
+	}
+	t.Cleanup(func() { providerFactories["evn"] = orig })
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"list-points", "-profile", "second"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(list-points -profile second) = %d, stderr = %s", code, stderr.String())
+	}
+	if len(got) != 2 || got[0] != "bob" || got[1] != "pw2" {
+		t.Fatalf("provider credentials = %v, want [bob pw2]", got)
+	}
+}
+
+func TestRun_Fetch_UnknownProfile(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	var addOut, addErr bytes.Buffer
+	runProfile([]string{"add", "main"}, &addOut, &addErr)
+	t.Setenv("SMARTMETER_USER", "")
+	t.Setenv("SMARTMETER_PASSWORD", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"list-points", "-profile", "ghost"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(list-points, unknown profile) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), `no profile "ghost"`) {
+		t.Errorf("stderr = %q, want unknown profile message", stderr.String())
 	}
 }
 
