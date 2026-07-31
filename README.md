@@ -22,10 +22,13 @@ stores, it doesn't know or care about Home Assistant.
 
 ## Status
 
-The EVN/Netz NÖ provider and a CLI to drive it (`list-points`, `fetch`,
-`profile`) are implemented. The JSON file store and query API are not yet
-implemented, so `fetch` currently prints readings as JSON rather than
-persisting them.
+The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
+(`list-points`, `fetch`, `profile`) are implemented. `fetch` persists
+readings to `-data-dir` (one JSON file per provider/point/day) and, by
+default, only logs what it did rather than printing readings to stdout
+(pass `-json` for that). A day already present in `-data-dir` is skipped
+rather than re-fetched, unless `-force` is passed. The query API is not
+yet implemented.
 
 Each reading carries a `quality` code when the portal reports one: `L2`
 (substitute value, final) or `L3` (substitute value, still provisional —
@@ -40,7 +43,11 @@ export SMARTMETER_PASSWORD=hunter2
 
 smartmeter-fetch list-points
 smartmeter-fetch fetch -point <id> -day 2024-01-15
-smartmeter-fetch fetch -point <id> -day 2024-01-15 -v   # verbose logging
+smartmeter-fetch fetch -point <id> -from 2024-01-01 -to 2024-01-31  # date range
+smartmeter-fetch fetch -point <id> -from -30 -to -20                # or days before today; -to defaults to today
+smartmeter-fetch fetch -since-latest                      # resume every point from its last stored day
+smartmeter-fetch fetch -point <id> -day 2024-01-15 -log-level debug
+smartmeter-fetch fetch -point <id> -day 2024-01-15 -verbose         # shorthand for -log-level debug
 ```
 
 Credentials can also be stored once, encrypted under a master passphrase
@@ -63,6 +70,8 @@ type Provider interface {
 type Store interface {
     Put(ctx context.Context, provider, pointID string, readings []Reading) error
     Get(ctx context.Context, provider, pointID string, since time.Time) ([]Reading, error)
+    Latest(ctx context.Context, provider, pointID string) (day time.Time, found bool, err error)
+    Has(ctx context.Context, provider, pointID string, day time.Time) (bool, error)
 }
 ```
 
@@ -70,10 +79,11 @@ type Store interface {
   smartmeter.netz-noe.at. More grid operators can be added as siblings here
   without touching storage or the API.
 - `internal/store/jsonfile` — the first `Store` implementation: one JSON
-  file per provider/metering point/day (`data/<provider>/<point>/<date>.json`),
-  written atomically so a delayed/backfilled day never gets read half-written.
-  Other backends (Postgres, MariaDB, SQLite) can be added later behind the
-  same interface if a single user ever needs them — not built speculatively.
+  file per provider/metering point/day (`data/<provider>/<point>/<date>.json`,
+  default `-data-dir`), written atomically so a delayed/backfilled day never
+  gets read half-written. Other backends (Postgres, MariaDB, SQLite) can be
+  added later behind the same interface if a single user ever needs them —
+  not built speculatively.
 - `internal/api` — a versioned (`/v1`) HTTP query API. This is the only
   thing consumers like hass-smartmeter ever talk to; they never see which
   provider or storage backend is behind it.

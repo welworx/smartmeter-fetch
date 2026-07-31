@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/store/jsonfile"
 )
 
 type stubProvider struct {
-	points   []provider.Point
-	readings []provider.Reading
-	err      error
+	points     []provider.Point
+	readings   []provider.Reading
+	err        error
+	fetchCalls int
 }
 
 func (s *stubProvider) Name() string { return "evn" }
@@ -25,6 +27,7 @@ func (s *stubProvider) ListPoints(ctx context.Context) ([]provider.Point, error)
 }
 
 func (s *stubProvider) FetchDay(ctx context.Context, pointID string, day time.Time) ([]provider.Reading, error) {
+	s.fetchCalls++
 	return s.readings, s.err
 }
 
@@ -67,8 +70,8 @@ func TestRun_Help(t *testing.T) {
 	// that can drift from the real flags.
 	for _, want := range []string{
 		"-provider", `default "evn"`,
-		"-user", "-password", "-user-agent", "-v", "-verbose",
-		"-point", "-day",
+		"-user", "-password", "-user-agent", "-log-level", "-verbose",
+		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json", "-force",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n---\n%s", want, out)
@@ -76,7 +79,7 @@ func TestRun_Help(t *testing.T) {
 	}
 
 	// Every env var that influences behavior.
-	for _, want := range []string{"SMARTMETER_USER", "SMARTMETER_PASSWORD"} {
+	for _, want := range []string{"SMARTMETER_USER", "SMARTMETER_PASSWORD", "SMARTMETER_DATA_DIR"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing env var %q\n---\n%s", want, out)
 		}
@@ -120,9 +123,10 @@ func TestRun_Fetch_NoPointFetchesEveryPointOfDirectLogin(t *testing.T) {
 	})
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-day", "2024-01-15"}, &stdout, &stderr)
+	code := run([]string{"fetch", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(fetch, no -point) = %d, stderr = %s", code, stderr.String())
 	}
@@ -154,9 +158,10 @@ func TestRun_Fetch_NoPointNoProfileFetchesEveryProfile(t *testing.T) {
 	runProfile([]string{"add", "second"}, &addOut, &addErr)
 	t.Setenv("SMARTMETER_USER", "")
 	t.Setenv("SMARTMETER_PASSWORD", "")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-day", "2024-01-15"}, &stdout, &stderr)
+	code := run([]string{"fetch", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(fetch, no -point/-profile) = %d, stderr = %s", code, stderr.String())
 	}
@@ -179,6 +184,7 @@ func TestRun_Fetch_DayDefaultsToYesterday(t *testing.T) {
 	withStubProvider(t, &stubProvider{readings: want})
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"fetch", "-point", "AT001"}, &stdout, &stderr)
@@ -220,9 +226,10 @@ func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
 
 	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1000}}
 	withStubProvider(t, &stubProvider{readings: want})
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15"}, &stdout, &stderr)
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
 	}
@@ -283,7 +290,10 @@ func TestRun_Fetch_UnknownProfile(t *testing.T) {
 	if code != 2 {
 		t.Errorf("run(list-points, unknown profile) = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), `no profile "ghost"`) {
+	// slog's text handler quotes/escapes attribute values (correct for
+	// machine-parseable logs), so match substrings rather than the raw
+	// quoted phrase.
+	if !strings.Contains(stderr.String(), "no profile") || !strings.Contains(stderr.String(), "ghost") {
 		t.Errorf("stderr = %q, want unknown profile message", stderr.String())
 	}
 }
@@ -294,8 +304,11 @@ func TestRun_Fetch_UnknownProvider(t *testing.T) {
 	if code != 2 {
 		t.Errorf("run(fetch, unknown provider) = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), `unknown provider "bogus"`) {
+	if !strings.Contains(stderr.String(), "unknown provider") || !strings.Contains(stderr.String(), "bogus") {
 		t.Errorf("stderr = %q, want unknown provider message", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("stderr = %q, want a structured log line (level=ERROR), not a bare print", stderr.String())
 	}
 }
 
@@ -305,7 +318,7 @@ func TestRun_ListPoints(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSWORD", "p")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"list-points", "-v"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"list-points", "-log-level", "debug"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("run(list-points) = %d, stderr = %s", code, stderr.String())
 	}
 
@@ -320,7 +333,32 @@ func TestRun_ListPoints(t *testing.T) {
 		t.Errorf("stderr = %q, want log output", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "listed metering points") {
-		t.Errorf("stderr = %q, want debug log output with -v", stderr.String())
+		t.Errorf("stderr = %q, want debug log output with -log-level debug", stderr.String())
+	}
+}
+
+func TestRun_ListPoints_VerboseForcesDebugLevel(t *testing.T) {
+	withStubProvider(t, &stubProvider{points: []provider.Point{{ID: "AT001", Name: "Verbrauch"}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"list-points", "-verbose"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(list-points, -verbose) = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "listed metering points") {
+		t.Errorf("stderr = %q, want debug log output with -verbose", stderr.String())
+	}
+}
+
+func TestRun_ListPoints_UnknownLogLevel(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"list-points", "-log-level", "bogus", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(list-points, bad -log-level) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), `-log-level "bogus"`) {
+		t.Errorf("stderr = %q, want -log-level error message", stderr.String())
 	}
 }
 
@@ -344,9 +382,11 @@ func TestRun_Fetch(t *testing.T) {
 	withStubProvider(t, &stubProvider{readings: want})
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
+	dataDir := t.TempDir()
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15"}, &stdout, &stderr)
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
 	}
@@ -359,7 +399,340 @@ func TestRun_Fetch(t *testing.T) {
 		t.Errorf("results = %+v, want 1 result with readings %+v and non-zero FetchedAt", got, want)
 	}
 	if strings.Contains(stderr.String(), "fetched readings") {
-		t.Errorf("stderr = %q, want no debug output without -v", stderr.String())
+		t.Errorf("stderr = %q, want no debug output at default -log-level", stderr.String())
+	}
+
+	stored, err := jsonfile.New(dataDir).Get(context.Background(), "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Value != 1000 {
+		t.Errorf("stored readings = %+v, want the fetched reading persisted", stored)
+	}
+}
+
+func TestRun_Fetch_NoJSONFlagPrintsNothingToStdout(t *testing.T) {
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1000}}
+	withStubProvider(t, &stubProvider{readings: want})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty without -json", stdout.String())
+	}
+}
+
+func TestRun_Fetch_DateRange(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "2024-01-15", "-to", "2024-01-17", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from/-to) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 3 {
+		t.Fatalf("results = %+v, want 3 (one per day, Jan 15-17)", got)
+	}
+	for i, day := range []string{"2024-01-15", "2024-01-16", "2024-01-17"} {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_FromAbsoluteDateDefaultsToToday(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	from := time.Now().AddDate(0, 0, -1)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", from.Format(dayLayout), "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from without -to) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	wantDays := []string{from.Format(dayLayout), time.Now().Format(dayLayout)}
+	if len(got) != len(wantDays) {
+		t.Fatalf("results = %+v, want %d days (-from through today)", got, len(wantDays))
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_DayAndFromAreMutuallyExclusive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-from", "2024-01-15", "-to", "2024-01-16", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(fetch, -day and -from) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "mutually exclusive") {
+		t.Errorf("stderr = %q, want mutual-exclusivity error", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("stderr = %q, want a structured log line (level=ERROR), not a bare print", stderr.String())
+	}
+}
+
+func TestRun_Fetch_OffsetRange(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-2", "-to", "-1", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from/-to as offsets) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("results = %+v, want 2 (one per day, offsets -2 and -1)", got)
+	}
+	wantDays := []string{
+		time.Now().AddDate(0, 0, -2).Format(dayLayout),
+		time.Now().AddDate(0, 0, -1).Format(dayLayout),
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_OffsetFromDefaultsToWithoutTo(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-2", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from offset without -to) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	wantDays := []string{
+		time.Now().AddDate(0, 0, -2).Format(dayLayout),
+		time.Now().AddDate(0, 0, -1).Format(dayLayout),
+		time.Now().Format(dayLayout),
+	}
+	if len(got) != len(wantDays) {
+		t.Fatalf("results = %+v, want %d days (-from through today)", got, len(wantDays))
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_ToWithoutFromErrors(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-to", "-1", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(fetch, -to without -from) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "-to requires -from") {
+		t.Errorf("stderr = %q, want -to-requires-from error", stderr.String())
+	}
+}
+
+func TestRun_Fetch_ToBeforeFromErrors(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-1", "-to", "-30", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(fetch, -to before -from) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "is before") {
+		t.Errorf("stderr = %q, want -to-before-from error", stderr.String())
+	}
+}
+
+func TestRun_Fetch_SinceLatestFallsBackToYesterdayWhenNothingStored(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-since-latest", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -since-latest, nothing stored) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	if len(got) != 1 || got[0].Day != yesterday {
+		t.Errorf("results = %+v, want 1 result for yesterday (%s)", got, yesterday)
+	}
+}
+
+// seedYesterday stores one reading for "yesterday" so -since-latest's
+// resolved range (latest..yesterday) is exactly that single day — keeping
+// these tests independent of how many days have passed since a fixed date.
+func seedYesterday(t *testing.T, dataDir string, value float64) string {
+	t.Helper()
+	day := yesterday()
+	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
+		{Timestamp: day, Value: value},
+	}); err != nil {
+		t.Fatalf("seeding store: %v", err)
+	}
+	return day.Format(dayLayout)
+}
+
+func TestRun_Fetch_SinceLatestSkipsAlreadyStoredBoundaryDayByDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	dayStr := seedYesterday(t, dataDir, 1)
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: yesterday(), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-since-latest", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -since-latest) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].Day != dayStr || !got[0].Skipped {
+		t.Fatalf("results = %+v, want a single skipped result for %s (already stored)", got, dayStr)
+	}
+	if stub.fetchCalls != 0 {
+		t.Errorf("fetchCalls = %d, want 0: the already-stored boundary day should not hit the portal without -force", stub.fetchCalls)
+	}
+	stored, err := jsonfile.New(dataDir).Get(context.Background(), "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Value != 1 {
+		t.Errorf("stored = %+v, want the original seeded reading (value 1) unchanged", stored)
+	}
+}
+
+func TestRun_Fetch_SinceLatestForceRefetchesStoredBoundaryDay(t *testing.T) {
+	dataDir := t.TempDir()
+	dayStr := seedYesterday(t, dataDir, 1)
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: yesterday(), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-since-latest", "-force", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -since-latest -force) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].Day != dayStr || got[0].Skipped {
+		t.Fatalf("results = %+v, want a single re-fetched (not skipped) result for %s", got, dayStr)
+	}
+	if stub.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1: -force should hit the portal even for an already-stored day", stub.fetchCalls)
+	}
+	stored, err := jsonfile.New(dataDir).Get(context.Background(), "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Value != 2 {
+		t.Errorf("stored = %+v, want the revised reading (value 2) after -force", stored)
+	}
+}
+
+func TestRun_Fetch_SkipsAlreadyStoredDayByDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
+		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
+	}); err != nil {
+		t.Fatalf("seeding store: %v", err)
+	}
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -day already stored) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || !got[0].Skipped || len(got[0].Readings) != 0 {
+		t.Fatalf("results = %+v, want a single skipped result with no readings", got)
+	}
+	if stub.fetchCalls != 0 {
+		t.Errorf("fetchCalls = %d, want 0: an already-stored day should not hit the portal without -force", stub.fetchCalls)
+	}
+}
+
+func TestRun_Fetch_ForceRefetchesStoredDay(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
+		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
+	}); err != nil {
+		t.Fatalf("seeding store: %v", err)
+	}
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-force", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -day -force) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].Skipped || len(got[0].Readings) != 1 || got[0].Readings[0].Value != 2 {
+		t.Fatalf("results = %+v, want a single re-fetched result with the revised reading", got)
+	}
+	if stub.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1", stub.fetchCalls)
 	}
 }
 
