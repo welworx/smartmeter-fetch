@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
 func TestProvider_Name(t *testing.T) {
@@ -144,5 +146,43 @@ func TestProvider_Get_ErrorsOnPersistentFailure(t *testing.T) {
 
 	if _, err := p.get(context.Background(), "/data", nil); err == nil {
 		t.Fatal("get() error = nil, want error for persistent 500")
+	}
+}
+
+func TestProvider_ListPoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/orchestration/User/GetAccountIdByBussinespartnerId":
+			w.Write([]byte(`[
+				{"accountId": "acc-eligible", "hasSmartMeter": true, "hasElectricity": true, "hasCommunicative": true, "hasActive": true},
+				{"accountId": "acc-ineligible", "hasSmartMeter": false, "hasElectricity": true, "hasCommunicative": true, "hasActive": true}
+			]`))
+		case "/orchestration/User/GetMeteringPointByAccountId":
+			if got := r.URL.Query().Get("accountId"); got != "acc-eligible" {
+				t.Fatalf("GetMeteringPointByAccountId called for accountId = %q, want acc-eligible", got)
+			}
+			w.Write([]byte(`[
+				{"meteringPointId": "AT0020000000000000000000100123456", "typeOfRelation": "Verbrauch"}
+			]`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	points, err := p.ListPoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListPoints() error = %v", err)
+	}
+	want := []provider.Point{
+		{ID: "AT0020000000000000000000100123456", Name: "Verbrauch"},
+	}
+	if len(points) != len(want) || points[0] != want[0] {
+		t.Errorf("ListPoints() = %+v, want %+v", points, want)
 	}
 }

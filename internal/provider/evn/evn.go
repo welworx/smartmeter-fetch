@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "time/tzdata"
+
+	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
 const defaultBaseURL = "https://smartmeter.netz-noe.at"
@@ -129,4 +131,50 @@ func (p *Provider) doGet(ctx context.Context, path string, query url.Values) ([]
 		return nil, resp.StatusCode, fmt.Errorf("evn: reading response for %s: %w", path, err)
 	}
 	return b, resp.StatusCode, nil
+}
+
+type account struct {
+	AccountID        string `json:"accountId"`
+	HasSmartMeter    bool   `json:"hasSmartMeter"`
+	HasElectricity   bool   `json:"hasElectricity"`
+	HasCommunicative bool   `json:"hasCommunicative"`
+	HasActive        bool   `json:"hasActive"`
+}
+
+type meteringPoint struct {
+	MeteringPointID string `json:"meteringPointId"`
+	TypeOfRelation  string `json:"typeOfRelation"`
+}
+
+// ListPoints implements provider.Provider.
+func (p *Provider) ListPoints(ctx context.Context) ([]provider.Point, error) {
+	body, err := p.get(ctx, "/orchestration/User/GetAccountIdByBussinespartnerId", url.Values{"context": {"2"}})
+	if err != nil {
+		return nil, err
+	}
+	var accounts []account
+	if err := json.Unmarshal(body, &accounts); err != nil {
+		return nil, fmt.Errorf("evn: decoding accounts: %w", err)
+	}
+
+	var points []provider.Point
+	for _, acc := range accounts {
+		if acc.AccountID == "" || !acc.HasSmartMeter || !acc.HasElectricity || !acc.HasCommunicative || !acc.HasActive {
+			continue
+		}
+
+		body, err := p.get(ctx, "/orchestration/User/GetMeteringPointByAccountId",
+			url.Values{"context": {"2"}, "accountId": {acc.AccountID}})
+		if err != nil {
+			return nil, err
+		}
+		var meters []meteringPoint
+		if err := json.Unmarshal(body, &meters); err != nil {
+			return nil, fmt.Errorf("evn: decoding metering points for account %s: %w", acc.AccountID, err)
+		}
+		for _, m := range meters {
+			points = append(points, provider.Point{ID: m.MeteringPointID, Name: m.TypeOfRelation})
+		}
+	}
+	return points, nil
 }
