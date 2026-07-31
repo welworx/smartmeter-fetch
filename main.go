@@ -52,22 +52,27 @@ Examples:
   smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
 `
 
-// printUsage writes the full help text: commands, every flag on every
-// subcommand with its default, the environment variables that affect
-// behavior, and usage examples. This is the single source of truth for
-// help output — "smartmeter-fetch help", "-h"/"--help", a bare invocation,
-// and an unknown command all print it, so it can never drift out of sync
-// with the flags actually registered below.
+// printUsage writes the full help text: commands, every flag with its
+// default (shared flags listed once, not per subcommand), the environment
+// variables that affect behavior, and usage examples. This is the single
+// source of truth for help output — "smartmeter-fetch help", "-h"/"--help",
+// a bare invocation, and an unknown command all print it, so it can never
+// drift out of sync with the flags actually registered below.
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, usageHeader)
 
-	fmt.Fprint(w, "\nlist-points flags:\n")
-	lpFS, _ := newListPointsFlagSet(w)
-	lpFS.PrintDefaults()
+	fmt.Fprint(w, "\nCommon flags (list-points, fetch):\n")
+	commonFS := flag.NewFlagSet("common", flag.ContinueOnError)
+	commonFS.SetOutput(w)
+	var c providerFlags
+	c.register(commonFS)
+	commonFS.PrintDefaults()
 
-	fmt.Fprint(w, "\nfetch flags:\n")
-	fFS, _, _, _ := newFetchFlagSet(w)
-	fFS.PrintDefaults()
+	fmt.Fprint(w, "\nfetch-only flags:\n")
+	fetchOnlyFS := flag.NewFlagSet("fetch-only", flag.ContinueOnError)
+	fetchOnlyFS.SetOutput(w)
+	registerFetchOnlyFlags(fetchOnlyFS)
+	fetchOnlyFS.PrintDefaults()
 
 	fmt.Fprint(w, usageFooter)
 }
@@ -192,6 +197,15 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 	return printJSON(stdout, stderr, points)
 }
 
+// registerFetchOnlyFlags registers the flags unique to "fetch" (on top of
+// the common providerFlags). A standalone function so printUsage can list
+// these without also pulling in the common ones a second time.
+func registerFetchOnlyFlags(fs *flag.FlagSet) (point, day *string) {
+	point = fs.String("point", "", "metering point ID (required, see list-points)")
+	day = fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
+	return point, day
+}
+
 // newFetchFlagSet builds the "fetch" flag set. Shared between runFetch
 // (which parses real args) and printUsage (which only wants the flag
 // list), so the two can never fall out of sync.
@@ -200,8 +214,7 @@ func newFetchFlagSet(out io.Writer) (fs *flag.FlagSet, c *providerFlags, point, 
 	fs.SetOutput(out)
 	c = &providerFlags{}
 	c.register(fs)
-	point = fs.String("point", "", "metering point ID (required, see list-points)")
-	day = fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
+	point, day = registerFetchOnlyFlags(fs)
 	fs.Usage = func() {
 		fmt.Fprint(out, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch -point <id> -day <YYYY-MM-DD> [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
