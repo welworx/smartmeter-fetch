@@ -211,9 +211,20 @@ func (p *Provider) ListPoints(ctx context.Context) ([]provider.Point, error) {
 }
 
 type dayRecord struct {
-	ECID            *string    `json:"ec_id"`
-	MeteredValues   []*float64 `json:"meteredValues"`
-	EstimatedValues []*float64 `json:"estimatedValues"`
+	ECID    *string    `json:"ec_id"`
+	Metered []*float64 `json:"meteredValues"`
+	// Estimated and EstimatedQualities are the portal's substitute values
+	// for intervals with no measured reading yet, and each one's quality
+	// code ("L2" final, "L3" still provisional).
+	//
+	// ponytail: the portal's own UI labels a measured value "L1", but the
+	// API response never carries that code anywhere we've observed (no
+	// per-interval field alongside meteredValues) - only estimatedValues
+	// get an explicit quality. Rather than hardcode "L1" on an assumption,
+	// Reading.Quality is left empty for measured values for now. Revisit
+	// if a captured response ever shows otherwise.
+	Estimated          []*float64 `json:"estimatedValues"`
+	EstimatedQualities []*string  `json:"estimatedQualities"`
 }
 
 // FetchDay implements provider.Provider.
@@ -247,25 +258,34 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 	}
 
 	midnight := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, viennaLocation)
-	maxLen := len(total.MeteredValues)
-	if len(total.EstimatedValues) > maxLen {
-		maxLen = len(total.EstimatedValues)
+	maxLen := len(total.Metered)
+	if len(total.Estimated) > maxLen {
+		maxLen = len(total.Estimated)
 	}
 	readings := make([]provider.Reading, 0, maxLen)
 	for i := 0; i < maxLen; i++ {
 		var value *float64
-		if i < len(total.MeteredValues) {
-			value = total.MeteredValues[i]
+		if i < len(total.Metered) {
+			value = total.Metered[i]
 		}
-		if value == nil && i < len(total.EstimatedValues) {
-			value = total.EstimatedValues[i]
-		}
-		if value == nil {
+		if value != nil {
+			readings = append(readings, provider.Reading{
+				Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
+				Value:     *value * 1000,
+			})
 			continue
+		}
+		if i >= len(total.Estimated) || total.Estimated[i] == nil {
+			continue
+		}
+		quality := ""
+		if i < len(total.EstimatedQualities) && total.EstimatedQualities[i] != nil {
+			quality = *total.EstimatedQualities[i]
 		}
 		readings = append(readings, provider.Reading{
 			Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
-			Value:     *value * 1000,
+			Value:     *total.Estimated[i] * 1000,
+			Quality:   quality,
 		})
 	}
 	return readings, nil
