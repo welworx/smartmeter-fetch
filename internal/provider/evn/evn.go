@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -19,6 +20,12 @@ import (
 )
 
 const defaultBaseURL = "https://smartmeter.netz-noe.at"
+
+// DefaultUserAgent is sent on every request unless Provider.UserAgent is
+// set. The portal has been observed to reject requests carrying Go's
+// default "Go-http-client/..." User-Agent, so a browser-like one is used
+// instead.
+const DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 var viennaLocation = func() *time.Location {
 	loc, err := time.LoadLocation("Europe/Vienna")
@@ -36,6 +43,14 @@ type Provider struct {
 	password   string
 	httpClient *http.Client
 	loggedIn   bool
+
+	// UserAgent is sent as the User-Agent header on every request.
+	// Defaults to DefaultUserAgent; set to override.
+	UserAgent string
+
+	// Logger, if non-nil, receives Info-level auth events and Debug-level
+	// request URLs. Left nil, the Provider logs nothing.
+	Logger *slog.Logger
 }
 
 var _ provider.Provider = (*Provider)(nil)
@@ -49,11 +64,24 @@ func New(username, password string) *Provider {
 		username:   username,
 		password:   password,
 		httpClient: &http.Client{Jar: jar, Timeout: 30 * time.Second},
+		UserAgent:  DefaultUserAgent,
 	}
 }
 
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return "evn" }
+
+func (p *Provider) debug(msg string, args ...any) {
+	if p.Logger != nil {
+		p.Logger.Debug(msg, args...)
+	}
+}
+
+func (p *Provider) info(msg string, args ...any) {
+	if p.Logger != nil {
+		p.Logger.Info(msg, args...)
+	}
+}
 
 type loginRequest struct {
 	User     string `json:"user"`
@@ -63,16 +91,19 @@ type loginRequest struct {
 func (p *Provider) login(ctx context.Context) error {
 	p.loggedIn = false
 
+	loginURL := p.baseURL + "/orchestration/Authentication/Login"
+	p.info("evn: authenticating", "url", loginURL, "user_agent", p.UserAgent)
+
 	body, err := json.Marshal(loginRequest{User: p.username, Password: p.password})
 	if err != nil {
 		return fmt.Errorf("evn: encoding login request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		p.baseURL+"/orchestration/Authentication/Login", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("evn: building login request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", p.UserAgent)
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -85,6 +116,7 @@ func (p *Provider) login(ctx context.Context) error {
 		return fmt.Errorf("evn: login failed with status %d", resp.StatusCode)
 	}
 	p.loggedIn = true
+	p.info("evn: authenticated")
 	return nil
 }
 
@@ -100,6 +132,7 @@ func (p *Provider) get(ctx context.Context, path string, query url.Values) ([]by
 		return nil, err
 	}
 	if status == http.StatusUnauthorized {
+		p.info("evn: session expired, re-authenticating", "path", path)
 		if err := p.login(ctx); err != nil {
 			return nil, err
 		}
@@ -119,10 +152,12 @@ func (p *Provider) doGet(ctx context.Context, path string, query url.Values) ([]
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
+	p.debug("evn: GET", "url", u)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("evn: building request for %s: %w", path, err)
 	}
+	req.Header.Set("User-Agent", p.UserAgent)
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("evn: request %s: %w", path, err)
@@ -133,6 +168,7 @@ func (p *Provider) doGet(ctx context.Context, path string, query url.Values) ([]
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("evn: reading response for %s: %w", path, err)
 	}
+	p.debug("evn: GET response", "url", u, "status", resp.StatusCode)
 	return b, resp.StatusCode, nil
 }
 

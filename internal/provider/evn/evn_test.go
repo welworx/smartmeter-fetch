@@ -1,10 +1,13 @@
 package evn
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +62,79 @@ func TestProvider_Login_Failure(t *testing.T) {
 	}
 	if p.loggedIn {
 		t.Error("login() set loggedIn = true after a failed login")
+	}
+}
+
+func TestProvider_UserAgent_Default(t *testing.T) {
+	var gotUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	if err := p.login(context.Background()); err != nil {
+		t.Fatalf("login() error = %v", err)
+	}
+	if gotUA != DefaultUserAgent {
+		t.Errorf("User-Agent = %q, want default %q", gotUA, DefaultUserAgent)
+	}
+}
+
+func TestProvider_UserAgent_Override(t *testing.T) {
+	var gotUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+	p.UserAgent = "custom-agent/1.0"
+
+	if err := p.login(context.Background()); err != nil {
+		t.Fatalf("login() error = %v", err)
+	}
+	if gotUA != "custom-agent/1.0" {
+		t.Errorf("User-Agent = %q, want custom-agent/1.0", gotUA)
+	}
+}
+
+func TestProvider_Logger_LogsAuthAndURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/data":
+			w.Write([]byte(`{"ok":true}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	p := New("user", "pass")
+	p.baseURL = server.URL
+	p.Logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if _, err := p.get(context.Background(), "/data", nil); err != nil {
+		t.Fatalf("get() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "authenticating") || !strings.Contains(out, "/orchestration/Authentication/Login") {
+		t.Errorf("log output = %q, want an authenticating line with the login URL", out)
+	}
+	if !strings.Contains(out, "authenticated") {
+		t.Errorf("log output = %q, want an authenticated confirmation", out)
+	}
+	if !strings.Contains(out, server.URL+"/data") {
+		t.Errorf("log output = %q, want the requested URL", out)
 	}
 }
 

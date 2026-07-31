@@ -22,9 +22,18 @@ stores, it doesn't know or care about Home Assistant.
 
 ## Status
 
-Early scaffolding — repo structure, interfaces, and tooling are in place;
-the EVN/Netz NÖ provider, JSON file store, and query API are not yet
-implemented.
+The EVN/Netz NÖ provider and a CLI to drive it (`list-points`, `fetch`) are
+implemented. The JSON file store and query API are not yet implemented, so
+`fetch` currently prints readings as JSON rather than persisting them.
+
+```bash
+export SMARTMETER_USER=you@example.com
+export SMARTMETER_PASSWORD=hunter2
+
+smartmeter-fetch list-points
+smartmeter-fetch fetch -point <id> -day 2024-01-15
+smartmeter-fetch fetch -point <id> -day 2024-01-15 -v   # verbose logging
+```
 
 ## Architecture
 
