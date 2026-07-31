@@ -29,6 +29,7 @@ var viennaLocation = func() *time.Location {
 }()
 
 // Provider fetches readings from the Netz NÖ (EVN) smart meter portal.
+// A Provider is not safe for concurrent use.
 type Provider struct {
 	baseURL    string
 	username   string
@@ -80,6 +81,7 @@ func (p *Provider) login(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("evn: login failed with status %d", resp.StatusCode)
 	}
 	p.loggedIn = true
@@ -187,6 +189,8 @@ type dayRecord struct {
 }
 
 // FetchDay implements provider.Provider.
+// FetchDay uses day's calendar date (Year/Month/Day) as-is, in whatever location day's *time.Time carries;
+// it does not convert day to Europe/Vienna first.
 func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) ([]provider.Reading, error) {
 	query := url.Values{
 		"meterId": {pointID},

@@ -343,3 +343,66 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 		t.Errorf("readings[3].ValueWh = %v, want 4000", readings[3].ValueWh)
 	}
 }
+
+func TestProvider_FetchDay_DSTFallBack(t *testing.T) {
+	// 2024-10-27 is the fall-back transition day in Europe/Vienna:
+	// 03:00 CEST becomes 02:00 CET, so the day has 25 hours = 100 quarter-hour intervals.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/orchestration/ConsumptionRecord/Day":
+			if got := r.URL.Query().Get("day"); got != "2024-10-27" {
+				t.Fatalf("day = %q, want 2024-10-27", got)
+			}
+			// Build response with 100 metered values (one for each 15-minute interval).
+			meteredValues := make([]*float64, 100)
+			val := 1.0
+			for i := range meteredValues {
+				meteredValues[i] = &val
+			}
+			resp := []dayRecord{
+				{
+					ECID:          nil,
+					MeteredValues: meteredValues,
+				},
+			}
+			b, _ := json.Marshal(resp)
+			w.Write(b)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	day := time.Date(2024, time.October, 27, 0, 0, 0, 0, time.UTC)
+	readings, err := p.FetchDay(context.Background(), "some-point", day)
+	if err != nil {
+		t.Fatalf("FetchDay() error = %v", err)
+	}
+
+	if len(readings) != 100 {
+		t.Fatalf("FetchDay() returned %d readings, want 100 (DST day has 25 hours)", len(readings))
+	}
+
+	// Vienna is UTC+2 before the fall-back on 2024-10-27.
+	// Local midnight 2024-10-27T00:00 CEST = 2024-10-26T22:00:00Z.
+	wantFirst := time.Date(2024, time.October, 26, 22, 0, 0, 0, time.UTC)
+	if !readings[0].Timestamp.Equal(wantFirst) {
+		t.Errorf("readings[0].Timestamp = %v, want %v", readings[0].Timestamp, wantFirst)
+	}
+
+	// Verify all readings are exactly 15 minutes apart.
+	for i := 1; i < len(readings); i++ {
+		prev := readings[i-1].Timestamp
+		curr := readings[i].Timestamp
+		want := prev.Add(15 * time.Minute)
+		if !curr.Equal(want) {
+			t.Errorf("readings[%d].Timestamp = %v, want %v (15 min after readings[%d])",
+				i, curr, want, i-1)
+		}
+	}
+}
