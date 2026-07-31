@@ -22,9 +22,10 @@ stores, it doesn't know or care about Home Assistant.
 
 ## Status
 
-The EVN/Netz NÖ provider and a CLI to drive it (`list-points`, `fetch`) are
-implemented. The JSON file store and query API are not yet implemented, so
-`fetch` currently prints readings as JSON rather than persisting them.
+The EVN/Netz NÖ provider and a CLI to drive it (`list-points`, `fetch`,
+`profile`) are implemented. The JSON file store and query API are not yet
+implemented, so `fetch` currently prints readings as JSON rather than
+persisting them.
 
 ```bash
 export SMARTMETER_USER=you@example.com
@@ -37,7 +38,9 @@ smartmeter-fetch fetch -point <id> -day 2024-01-15 -v   # verbose logging
 
 Credentials can also be stored once, encrypted under a master passphrase
 (argon2id + AES-256-GCM, in `credentials.enc` under the OS config dir), via
-`smartmeter-fetch profile add <name>` — see `smartmeter-fetch help`.
+`smartmeter-fetch profile add <name>` — verified live against the portal
+before saving, and recheckable later with `smartmeter-fetch profile verify`.
+See `smartmeter-fetch help` for the full `profile` command reference.
 
 ## Architecture
 

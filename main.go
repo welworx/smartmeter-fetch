@@ -31,7 +31,7 @@ Usage:
 Commands:
   list-points   List metering points visible to the account
   fetch         Fetch one day's readings for a metering point
-  profile       Manage stored portal credentials (add/list/update/remove/passphrase)
+  profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
   version       Print version and exit
   help          Print this message
 `
