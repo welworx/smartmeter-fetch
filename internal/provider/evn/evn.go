@@ -264,7 +264,7 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 		}
 		readings = append(readings, provider.Reading{
 			Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
-			ValueWh:   *value * 1000,
+			Value:     *value * 1000,
 		})
 	}
 	return readings, nil

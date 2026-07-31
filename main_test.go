@@ -113,7 +113,7 @@ func TestRun_Version(t *testing.T) {
 }
 
 func TestRun_Fetch_NoPointFetchesEveryPointOfDirectLogin(t *testing.T) {
-	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), ValueWh: 1000}}
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1000}}
 	withStubProvider(t, &stubProvider{
 		points:   []provider.Point{{ID: "AT001"}, {ID: "AT002"}},
 		readings: want,
@@ -175,7 +175,7 @@ func TestRun_Fetch_NoPointNoProfileFetchesEveryProfile(t *testing.T) {
 }
 
 func TestRun_Fetch_DayDefaultsToYesterday(t *testing.T) {
-	want := []provider.Reading{{Timestamp: time.Now(), ValueWh: 1000}}
+	want := []provider.Reading{{Timestamp: time.Now(), Value: 1000}}
 	withStubProvider(t, &stubProvider{readings: want})
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
@@ -218,7 +218,7 @@ func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
 	t.Setenv("SMARTMETER_USER", "")
 	t.Setenv("SMARTMETER_PASSWORD", "")
 
-	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), ValueWh: 1000}}
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1000}}
 	withStubProvider(t, &stubProvider{readings: want})
 
 	var stdout, stderr bytes.Buffer
@@ -226,12 +226,12 @@ func TestRun_Fetch_UsesStoredProfileWhenNoFlags(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
 	}
-	var got []provider.Reading
+	var got []fetchResult
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
 	}
-	if len(got) != 1 || got[0].ValueWh != 1000 {
-		t.Errorf("readings = %+v, want %+v", got, want)
+	if len(got) != 1 || len(got[0].Readings) != 1 || got[0].Readings[0].Value != 1000 {
+		t.Errorf("results = %+v, want 1 result with readings %+v", got, want)
 	}
 }
 
@@ -340,7 +340,7 @@ func TestRun_ListPoints_ProviderError(t *testing.T) {
 }
 
 func TestRun_Fetch(t *testing.T) {
-	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), ValueWh: 1000}}
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1000}}
 	withStubProvider(t, &stubProvider{readings: want})
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
@@ -351,12 +351,12 @@ func TestRun_Fetch(t *testing.T) {
 		t.Fatalf("run(fetch) = %d, stderr = %s", code, stderr.String())
 	}
 
-	var got []provider.Reading
+	var got []fetchResult
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
 	}
-	if len(got) != 1 || got[0].ValueWh != 1000 {
-		t.Errorf("readings = %+v, want %+v", got, want)
+	if len(got) != 1 || len(got[0].Readings) != 1 || got[0].Readings[0].Value != 1000 || got[0].FetchedAt.IsZero() {
+		t.Errorf("results = %+v, want 1 result with readings %+v and non-zero FetchedAt", got, want)
 	}
 	if strings.Contains(stderr.String(), "fetched readings") {
 		t.Errorf("stderr = %q, want no debug output without -v", stderr.String())

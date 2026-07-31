@@ -348,44 +348,75 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 
 	log := newLogger(c.verbose, stderr)
 
-	if *point == "" {
-		return runFetchAll(c, parsedDay, dayStr, log, stdout, stderr)
+	if *point != "" {
+		profiles, err := c.resolveProfiles()
+		if err != nil {
+			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			return 2
+		}
+		prof := profiles[0]
+		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
+		if err != nil {
+			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			return 2
+		}
+		res := fetchPointResult(context.Background(), p, prof.label, *point, "", dayStr, parsedDay, log)
+		return printFetchResults(stdout, stderr, []fetchResult{res})
 	}
 
-	p, err := c.newProvider(log)
-	if err != nil {
-		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
-		return 2
-	}
-
-	log.Info("fetching day", "provider", p.Name(), "point", *point, "day", dayStr)
-	readings, err := p.FetchDay(context.Background(), *point, parsedDay)
-	if err != nil {
-		log.Error("fetching day failed", "error", err)
-		return 1
-	}
-	log.Debug("fetched readings", "count", len(readings))
-
-	return printJSON(stdout, stderr, readings)
+	return runFetchAll(c, parsedDay, dayStr, log, stdout, stderr)
 }
 
-// fetchResult is one point's outcome when "fetch" runs without -point,
-// fanning out across every point of one or more profiles.
+// fetchResult is one metering point's fetch outcome.
 type fetchResult struct {
-	Profile   string             `json:"profile,omitempty"`
-	Provider  string             `json:"provider"`
-	Point     string             `json:"point,omitempty"`
-	PointName string             `json:"point_name,omitempty"`
-	Day       string             `json:"day"`
-	Unit      string             `json:"unit"`
+	Profile   string `json:"profile,omitempty"`
+	Provider  string `json:"provider"`
+	Point     string `json:"point,omitempty"`
+	PointName string `json:"point_name,omitempty"`
+	Day       string `json:"day"`
+	Unit      string `json:"unit"`
+	// FetchedAt is when this fetch attempt ran, in case the portal later
+	// revises "day" (see CLAUDE.md: delayed/amendable data).
+	FetchedAt time.Time          `json:"fetched_at"`
 	Readings  []provider.Reading `json:"readings,omitempty"`
 	Error     string             `json:"error,omitempty"`
 }
 
+// fetchPointResult fetches one point's day and wraps the outcome (success or
+// error) in a fetchResult, logging either way. Shared by the explicit
+// -point path and runFetchAll's per-point loop.
+func fetchPointResult(ctx context.Context, p provider.Provider, profileLabel, pointID, pointName, dayStr string, day time.Time, log *slog.Logger) fetchResult {
+	log.Info("fetching day", "provider", p.Name(), "profile", profileLabel, "point", pointID, "day", dayStr)
+	readings, err := p.FetchDay(ctx, pointID, day)
+	res := fetchResult{Profile: profileLabel, Provider: p.Name(), Point: pointID, PointName: pointName, Day: dayStr, Unit: provider.Unit, FetchedAt: time.Now().UTC()}
+	if err != nil {
+		log.Error("fetching day failed", "profile", profileLabel, "point", pointID, "error", err)
+		res.Error = err.Error()
+		return res
+	}
+	res.Readings = readings
+	log.Debug("fetched readings", "profile", profileLabel, "point", pointID, "count", len(readings))
+	return res
+}
+
+// printFetchResults prints results as JSON and derives the exit code: 1 if
+// any result carries an error, 0 otherwise (2 is reserved for usage/setup
+// errors, returned by callers before this point).
+func printFetchResults(stdout, stderr io.Writer, results []fetchResult) int {
+	if code := printJSON(stdout, stderr, results); code != 0 {
+		return code
+	}
+	for _, r := range results {
+		if r.Error != "" {
+			return 1
+		}
+	}
+	return 0
+}
+
 // runFetchAll fetches day for every point of every profile resolved by c
 // (see providerFlags.resolveProfiles), continuing past a failed profile or
-// point so one bad login or point doesn't block the rest. Exit code is 1 if
-// any profile/point failed, even though partial results are still printed.
+// point so one bad login or point doesn't block the rest.
 func runFetchAll(c *providerFlags, day time.Time, dayStr string, log *slog.Logger, stdout, stderr io.Writer) int {
 	profiles, err := c.resolveProfiles()
 	if err != nil {
@@ -394,12 +425,11 @@ func runFetchAll(c *providerFlags, day time.Time, dayStr string, log *slog.Logge
 	}
 
 	var results []fetchResult
-	failed := false
 	for _, prof := range profiles {
 		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
 		if err != nil {
 			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
-			failed = true
+			results = append(results, fetchResult{Profile: prof.label, Provider: prof.providerName, Day: dayStr, Unit: provider.Unit, FetchedAt: time.Now().UTC(), Error: err.Error()})
 			continue
 		}
 
@@ -407,33 +437,16 @@ func runFetchAll(c *providerFlags, day time.Time, dayStr string, log *slog.Logge
 		points, err := p.ListPoints(context.Background())
 		if err != nil {
 			log.Error("listing metering points failed", "profile", prof.label, "error", err)
-			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Day: dayStr, Unit: provider.Unit, Error: err.Error()})
-			failed = true
+			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Day: dayStr, Unit: provider.Unit, FetchedAt: time.Now().UTC(), Error: err.Error()})
 			continue
 		}
 
 		for _, pt := range points {
-			log.Info("fetching day", "provider", p.Name(), "profile", prof.label, "point", pt.ID, "day", dayStr)
-			res := fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Day: dayStr, Unit: provider.Unit}
-			readings, err := p.FetchDay(context.Background(), pt.ID, day)
-			if err != nil {
-				log.Error("fetching day failed", "profile", prof.label, "point", pt.ID, "error", err)
-				res.Error = err.Error()
-				failed = true
-			} else {
-				res.Readings = readings
-			}
-			results = append(results, res)
+			results = append(results, fetchPointResult(context.Background(), p, prof.label, pt.ID, pt.Name, dayStr, day, log))
 		}
 	}
 
-	if code := printJSON(stdout, stderr, results); code != 0 {
-		return code
-	}
-	if failed {
-		return 1
-	}
-	return 0
+	return printFetchResults(stdout, stderr, results)
 }
 
 // exitCodeForParseErr maps a flag.FlagSet.Parse error to a process exit
