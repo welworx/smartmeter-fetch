@@ -320,7 +320,6 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 	level, err := parseLogLevel(c.logLevel)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: -log-level %q: %v\n", c.logLevel, err)
-		fs.Usage()
 		return 2
 	}
 	log := newLogger(level, stderr)
@@ -508,13 +507,11 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	plan, err := parseFetchPlan(f)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
-		fs.Usage()
 		return 2
 	}
 	level, err := parseLogLevel(c.logLevel)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: -log-level %q: %v\n", c.logLevel, err)
-		fs.Usage()
 		return 2
 	}
 	log := newLogger(level, stderr)
