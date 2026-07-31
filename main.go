@@ -1,17 +1,209 @@
 // Command smartmeter-fetch fetches smart meter readings from grid operator
-// web portals, stores them locally, and serves them over a small HTTP API.
-//
-// Not yet implemented — this is repo scaffolding only.
+// web portals and prints them as JSON. Storage (internal/store/jsonfile) and
+// the query API (internal/api) are not yet implemented, so this CLI only
+// covers the fetch side for now.
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"time"
+
+	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/provider/evn"
 )
 
 var version = "dev"
 
+const usage = `smartmeter-fetch fetches quarter-hourly smart meter readings from grid
+operator web portals.
+
+Usage:
+  smartmeter-fetch <command> [flags]
+
+Commands:
+  list-points   List metering points visible to the account
+  fetch         Fetch one day's readings for a metering point
+  version       Print version and exit
+  help          Print this message
+
+Run "smartmeter-fetch <command> -h" for flags on a specific command.
+
+Credentials can be passed via -user/-password flags or the SMARTMETER_USER /
+SMARTMETER_PASSWORD environment variables (preferred — keeps them out of
+your shell history and process list).
+`
+
 func main() {
-	fmt.Fprintf(os.Stderr, "smartmeter-fetch %s: not yet implemented\n", version)
-	os.Exit(1)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "help", "-h", "--help":
+		fmt.Fprint(stdout, usage)
+		return 0
+	case "version":
+		fmt.Fprintf(stdout, "smartmeter-fetch %s\n", version)
+		return 0
+	case "list-points":
+		return runListPoints(rest, stdout, stderr)
+	case "fetch":
+		return runFetch(rest, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "smartmeter-fetch: unknown command %q\n\n", cmd)
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+}
+
+// providerFlags registers the flags every provider-talking subcommand
+// shares: which provider, credentials, and verbosity.
+type providerFlags struct {
+	name     string
+	user     string
+	password string
+	verbose  bool
+}
+
+func (c *providerFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&c.name, "provider", "evn", "grid operator provider (only \"evn\" is currently supported)")
+	fs.StringVar(&c.user, "user", os.Getenv("SMARTMETER_USER"), "portal username (default: $SMARTMETER_USER)")
+	fs.StringVar(&c.password, "password", os.Getenv("SMARTMETER_PASSWORD"), "portal password (default: $SMARTMETER_PASSWORD)")
+	fs.BoolVar(&c.verbose, "v", false, "verbose (debug) logging")
+	fs.BoolVar(&c.verbose, "verbose", false, "verbose (debug) logging")
+}
+
+// providerFactories maps a -provider name to its constructor. A map keeps
+// selection and construction in one place and gives tests a seam to inject
+// a fake provider without reaching into evn's unexported internals.
+var providerFactories = map[string]func(user, password string) provider.Provider{
+	"evn": func(user, password string) provider.Provider { return evn.New(user, password) },
+}
+
+func (c *providerFlags) newProvider() (provider.Provider, error) {
+	if c.user == "" || c.password == "" {
+		return nil, errors.New("missing credentials: pass -user/-password or set SMARTMETER_USER/SMARTMETER_PASSWORD")
+	}
+	factory, ok := providerFactories[c.name]
+	if !ok {
+		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", c.name)
+	}
+	return factory(c.user, c.password), nil
+}
+
+func newLogger(verbose bool, w io.Writer) *slog.Logger {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
+}
+
+func runListPoints(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("list-points", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var c providerFlags
+	c.register(fs)
+	fs.Usage = func() {
+		fmt.Fprint(stderr, "List metering points visible to the account.\n\nUsage:\n  smartmeter-fetch list-points [flags]\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return exitCodeForParseErr(err)
+	}
+
+	log := newLogger(c.verbose, stderr)
+	p, err := c.newProvider()
+	if err != nil {
+		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+		return 2
+	}
+
+	log.Info("listing metering points", "provider", p.Name())
+	points, err := p.ListPoints(context.Background())
+	if err != nil {
+		log.Error("listing metering points failed", "error", err)
+		return 1
+	}
+	log.Debug("listed metering points", "count", len(points))
+
+	return printJSON(stdout, stderr, points)
+}
+
+func runFetch(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var c providerFlags
+	c.register(fs)
+	point := fs.String("point", "", "metering point ID (required, see list-points)")
+	day := fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
+	fs.Usage = func() {
+		fmt.Fprint(stderr, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch -point <id> -day <YYYY-MM-DD> [flags]\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return exitCodeForParseErr(err)
+	}
+
+	if *point == "" {
+		fmt.Fprintln(stderr, "smartmeter-fetch: -point is required")
+		fs.Usage()
+		return 2
+	}
+	parsedDay, err := time.Parse("2006-01-02", *day)
+	if err != nil {
+		fmt.Fprintf(stderr, "smartmeter-fetch: -day %q: %v\n", *day, err)
+		fs.Usage()
+		return 2
+	}
+
+	log := newLogger(c.verbose, stderr)
+	p, err := c.newProvider()
+	if err != nil {
+		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+		return 2
+	}
+
+	log.Info("fetching day", "provider", p.Name(), "point", *point, "day", *day)
+	readings, err := p.FetchDay(context.Background(), *point, parsedDay)
+	if err != nil {
+		log.Error("fetching day failed", "error", err)
+		return 1
+	}
+	log.Debug("fetched readings", "count", len(readings))
+
+	return printJSON(stdout, stderr, readings)
+}
+
+// exitCodeForParseErr maps a flag.FlagSet.Parse error to a process exit
+// code. flag already printed the error and usage via fs.Usage before
+// returning it, so there's nothing left to log here.
+func exitCodeForParseErr(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
+}
+
+func printJSON(stdout, stderr io.Writer, v any) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintf(stderr, "smartmeter-fetch: encoding output: %v\n", err)
+		return 1
+	}
+	return 0
 }
