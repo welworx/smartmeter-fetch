@@ -25,6 +25,10 @@ of Home Assistant and should stay that way.
   cross-repo contract with hass-smartmeter: `GET /v1/points` and
   `GET /v1/readings?point=<id>&since=<RFC3339>`. Treat changes here as a
   breaking-change surface, not an internal implementation detail.
+- `internal/config/` — the encrypted credential profile store
+  (`credentials.enc`: argon2id-derived-key AES-256-GCM, atomic write). A
+  `Profile` is `{Name, Provider, Username, Password}`; driven by the CLI's
+  `profile` command (`main.go`, `cli_profile.go`).
 
 ## Critical constraint: delayed data
 

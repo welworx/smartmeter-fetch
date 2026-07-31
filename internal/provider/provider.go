@@ -11,16 +11,20 @@ import (
 // A prosumer account typically has one Point per direction (consumption and
 // production/feed-in each get their own Point).
 type Point struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
-// Reading is a single interval's energy value.
+// Reading is a single interval's energy value, in Unit (see Unit).
 type Reading struct {
 	// Timestamp is the start of the interval, in UTC.
-	Timestamp time.Time
-	ValueWh   float64
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
 }
+
+// Unit is the unit of measurement of every Reading.Value, for every
+// provider.
+const Unit = "Wh"
 
 // Provider fetches readings from one grid operator's web portal.
 type Provider interface {

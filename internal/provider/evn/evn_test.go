@@ -310,16 +310,16 @@ func TestProvider_FetchDay(t *testing.T) {
 	if !readings[0].Timestamp.Equal(wantFirst) {
 		t.Errorf("readings[0].Timestamp = %v, want %v", readings[0].Timestamp, wantFirst)
 	}
-	if readings[0].ValueWh != 1000 {
-		t.Errorf("readings[0].ValueWh = %v, want 1000 (1.0 kWh metered)", readings[0].ValueWh)
+	if readings[0].Value != 1000 {
+		t.Errorf("readings[0].Value = %v, want 1000 (1.0 kWh metered)", readings[0].Value)
 	}
 
 	wantSecond := wantFirst.Add(15 * time.Minute)
 	if !readings[1].Timestamp.Equal(wantSecond) {
 		t.Errorf("readings[1].Timestamp = %v, want %v", readings[1].Timestamp, wantSecond)
 	}
-	if readings[1].ValueWh != 2000 {
-		t.Errorf("readings[1].ValueWh = %v, want 2000 (2.0 kWh estimated fallback)", readings[1].ValueWh)
+	if readings[1].Value != 2000 {
+		t.Errorf("readings[1].Value = %v, want 2000 (2.0 kWh estimated fallback)", readings[1].Value)
 	}
 }
 
@@ -386,8 +386,8 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 	if !readings[0].Timestamp.Equal(wantBase) {
 		t.Errorf("readings[0].Timestamp = %v, want %v", readings[0].Timestamp, wantBase)
 	}
-	if readings[0].ValueWh != 1000 {
-		t.Errorf("readings[0].ValueWh = %v, want 1000", readings[0].ValueWh)
+	if readings[0].Value != 1000 {
+		t.Errorf("readings[0].Value = %v, want 1000", readings[0].Value)
 	}
 
 	// Index 1: metered 2.0 kWh
@@ -395,8 +395,8 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 	if !readings[1].Timestamp.Equal(want1) {
 		t.Errorf("readings[1].Timestamp = %v, want %v", readings[1].Timestamp, want1)
 	}
-	if readings[1].ValueWh != 2000 {
-		t.Errorf("readings[1].ValueWh = %v, want 2000", readings[1].ValueWh)
+	if readings[1].Value != 2000 {
+		t.Errorf("readings[1].Value = %v, want 2000", readings[1].Value)
 	}
 
 	// Index 2: estimated only (metered is nil) 3.0 kWh
@@ -404,8 +404,8 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 	if !readings[2].Timestamp.Equal(want2) {
 		t.Errorf("readings[2].Timestamp = %v, want %v", readings[2].Timestamp, want2)
 	}
-	if readings[2].ValueWh != 3000 {
-		t.Errorf("readings[2].ValueWh = %v, want 3000 (estimated fallback beyond metered length)", readings[2].ValueWh)
+	if readings[2].Value != 3000 {
+		t.Errorf("readings[2].Value = %v, want 3000 (estimated fallback beyond metered length)", readings[2].Value)
 	}
 
 	// Index 3: estimated only 4.0 kWh
@@ -413,8 +413,8 @@ func TestProvider_FetchDay_EstimatedOnlyIntervals(t *testing.T) {
 	if !readings[3].Timestamp.Equal(want3) {
 		t.Errorf("readings[3].Timestamp = %v, want %v", readings[3].Timestamp, want3)
 	}
-	if readings[3].ValueWh != 4000 {
-		t.Errorf("readings[3].ValueWh = %v, want 4000", readings[3].ValueWh)
+	if readings[3].Value != 4000 {
+		t.Errorf("readings[3].Value = %v, want 4000", readings[3].Value)
 	}
 }
 
