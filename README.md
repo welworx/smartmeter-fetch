@@ -26,7 +26,9 @@ The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
 (`list-points`, `fetch`, `profile`) are implemented. `fetch` persists
 readings to `-data-dir` (one JSON file per provider/point/day) and, by
 default, only logs what it did rather than printing readings to stdout
-(pass `-json` for that). The query API is not yet implemented.
+(pass `-json` for that). A day already present in `-data-dir` is skipped
+rather than re-fetched, unless `-force` is passed. The query API is not
+yet implemented.
 
 Each reading carries a `quality` code when the portal reports one: `L2`
 (substitute value, final) or `L3` (substitute value, still provisional —
@@ -66,6 +68,7 @@ type Store interface {
     Put(ctx context.Context, provider, pointID string, readings []Reading) error
     Get(ctx context.Context, provider, pointID string, since time.Time) ([]Reading, error)
     Latest(ctx context.Context, provider, pointID string) (day time.Time, found bool, err error)
+    Has(ctx context.Context, provider, pointID string, day time.Time) (bool, error)
 }
 ```
 

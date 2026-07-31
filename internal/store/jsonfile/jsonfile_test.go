@@ -126,6 +126,41 @@ func TestLatest_UnknownPointReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestHas(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+
+	has, err := s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T00:00:00Z"))
+	if err != nil {
+		t.Fatalf("Has (before Put): %v", err)
+	}
+	if has {
+		t.Error("Has (before Put) = true, want false")
+	}
+
+	if err := s.Put(ctx, "evn", "AT001", []provider.Reading{
+		{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T12:00:00Z"))
+	if err != nil {
+		t.Fatalf("Has (after Put, same day): %v", err)
+	}
+	if !has {
+		t.Error("Has (after Put, same day) = false, want true")
+	}
+
+	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-16T00:00:00Z"))
+	if err != nil {
+		t.Fatalf("Has (different day): %v", err)
+	}
+	if has {
+		t.Error("Has (different day) = true, want false")
+	}
+}
+
 func TestPut_EmptyReadingsIsNoop(t *testing.T) {
 	s := New(t.TempDir())
 	if err := s.Put(context.Background(), "evn", "AT001", nil); err != nil {

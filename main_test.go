@@ -14,9 +14,10 @@ import (
 )
 
 type stubProvider struct {
-	points   []provider.Point
-	readings []provider.Reading
-	err      error
+	points     []provider.Point
+	readings   []provider.Reading
+	err        error
+	fetchCalls int
 }
 
 func (s *stubProvider) Name() string { return "evn" }
@@ -26,6 +27,7 @@ func (s *stubProvider) ListPoints(ctx context.Context) ([]provider.Point, error)
 }
 
 func (s *stubProvider) FetchDay(ctx context.Context, pointID string, day time.Time) ([]provider.Reading, error) {
+	s.fetchCalls++
 	return s.readings, s.err
 }
 
@@ -69,7 +71,7 @@ func TestRun_Help(t *testing.T) {
 	for _, want := range []string{
 		"-provider", `default "evn"`,
 		"-user", "-password", "-user-agent", "-log-level",
-		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json",
+		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json", "-force",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n---\n%s", want, out)
@@ -474,14 +476,25 @@ func TestRun_Fetch_SinceLatestFallsBackToYesterdayWhenNothingStored(t *testing.T
 	}
 }
 
-func TestRun_Fetch_SinceLatestResumesFromLastStoredDay(t *testing.T) {
-	dataDir := t.TempDir()
+// seedYesterday stores one reading for "yesterday" so -since-latest's
+// resolved range (latest..yesterday) is exactly that single day — keeping
+// these tests independent of how many days have passed since a fixed date.
+func seedYesterday(t *testing.T, dataDir string, value float64) string {
+	t.Helper()
+	day := yesterday()
 	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
-		{Timestamp: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC), Value: 1},
+		{Timestamp: day, Value: value},
 	}); err != nil {
 		t.Fatalf("seeding store: %v", err)
 	}
-	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC), Value: 2}}})
+	return day.Format(dayLayout)
+}
+
+func TestRun_Fetch_SinceLatestSkipsAlreadyStoredBoundaryDayByDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	dayStr := seedYesterday(t, dataDir, 1)
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: yesterday(), Value: 2}}}
+	withStubProvider(t, stub)
 	t.Setenv("SMARTMETER_USER", "u")
 	t.Setenv("SMARTMETER_PASSWORD", "p")
 	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
@@ -495,8 +508,111 @@ func TestRun_Fetch_SinceLatestResumesFromLastStoredDay(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
 	}
-	if len(got) == 0 || got[0].Day != "2024-01-10" {
-		t.Fatalf("results = %+v, want the first day to be 2024-01-10 (the previously stored day, re-fetched)", got)
+	if len(got) != 1 || got[0].Day != dayStr || !got[0].Skipped {
+		t.Fatalf("results = %+v, want a single skipped result for %s (already stored)", got, dayStr)
+	}
+	if stub.fetchCalls != 0 {
+		t.Errorf("fetchCalls = %d, want 0: the already-stored boundary day should not hit the portal without -force", stub.fetchCalls)
+	}
+	stored, err := jsonfile.New(dataDir).Get(context.Background(), "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Value != 1 {
+		t.Errorf("stored = %+v, want the original seeded reading (value 1) unchanged", stored)
+	}
+}
+
+func TestRun_Fetch_SinceLatestForceRefetchesStoredBoundaryDay(t *testing.T) {
+	dataDir := t.TempDir()
+	dayStr := seedYesterday(t, dataDir, 1)
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: yesterday(), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-since-latest", "-force", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -since-latest -force) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].Day != dayStr || got[0].Skipped {
+		t.Fatalf("results = %+v, want a single re-fetched (not skipped) result for %s", got, dayStr)
+	}
+	if stub.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1: -force should hit the portal even for an already-stored day", stub.fetchCalls)
+	}
+	stored, err := jsonfile.New(dataDir).Get(context.Background(), "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Value != 2 {
+		t.Errorf("stored = %+v, want the revised reading (value 2) after -force", stored)
+	}
+}
+
+func TestRun_Fetch_SkipsAlreadyStoredDayByDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
+		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
+	}); err != nil {
+		t.Fatalf("seeding store: %v", err)
+	}
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -day already stored) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || !got[0].Skipped || len(got[0].Readings) != 0 {
+		t.Fatalf("results = %+v, want a single skipped result with no readings", got)
+	}
+	if stub.fetchCalls != 0 {
+		t.Errorf("fetchCalls = %d, want 0: an already-stored day should not hit the portal without -force", stub.fetchCalls)
+	}
+}
+
+func TestRun_Fetch_ForceRefetchesStoredDay(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
+		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
+	}); err != nil {
+		t.Fatalf("seeding store: %v", err)
+	}
+	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}
+	withStubProvider(t, stub)
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", dataDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-day", "2024-01-15", "-force", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -day -force) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 1 || got[0].Skipped || len(got[0].Readings) != 1 || got[0].Readings[0].Value != 2 {
+		t.Fatalf("results = %+v, want a single re-fetched result with the revised reading", got)
+	}
+	if stub.fetchCalls != 1 {
+		t.Errorf("fetchCalls = %d, want 1", stub.fetchCalls)
 	}
 }
 

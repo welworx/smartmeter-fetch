@@ -33,6 +33,10 @@ func (s *Store) pointDir(providerName, pointID string) string {
 	return filepath.Join(s.Dir, providerName, pointID)
 }
 
+func (s *Store) dayPath(providerName, pointID string, day time.Time) string {
+	return filepath.Join(s.pointDir(providerName, pointID), day.UTC().Format(dayFormat)+".json")
+}
+
 // Put writes readings for one provider/point, grouped and replaced one day
 // at a time: readings are split by their UTC calendar day, and each day's
 // file is overwritten wholesale, so calling Put again for an already-stored
@@ -57,7 +61,11 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		sort.Slice(dayReadings, func(i, j int) bool {
 			return dayReadings[i].Timestamp.Before(dayReadings[j].Timestamp)
 		})
-		if err := writeAtomic(filepath.Join(dir, day+".json"), dayReadings); err != nil {
+		dayTime, err := time.Parse(dayFormat, day)
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(s.dayPath(providerName, pointID, dayTime), dayReadings); err != nil {
 			return err
 		}
 	}
@@ -154,4 +162,16 @@ func (s *Store) Latest(ctx context.Context, providerName, pointID string) (time.
 		return time.Time{}, false, err
 	}
 	return day, true, nil
+}
+
+// Has reports whether a day file exists for providerName/pointID/day.
+func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.Time) (bool, error) {
+	_, err := os.Stat(s.dayPath(providerName, pointID, day))
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }

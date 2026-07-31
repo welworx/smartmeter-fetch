@@ -69,9 +69,14 @@ Examples:
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -from 2024-01-01 -to 2024-01-31
 
   # Resume each point from its last stored day through yesterday (falls
-  # back to just yesterday the first time, before anything is stored) —
-  # the intended way to run this on a schedule (cron, systemd timer, ...)
+  # back to just yesterday the first time, before anything is stored);
+  # days already stored are skipped, not re-fetched — the intended way to
+  # run this on a schedule (cron, systemd timer, ...)
   smartmeter-fetch fetch -since-latest
+
+  # A day already in -data-dir is skipped by default; -force re-fetches
+  # and overwrites it (e.g. to pick up a portal revision)
+  smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -force
 
   # Also print the fetch results as JSON to stdout (default: only logged)
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -json
@@ -350,6 +355,7 @@ type fetchFlags struct {
 	sinceLatest bool
 	dataDir     string
 	printJSON   bool
+	force       bool
 }
 
 // registerFetchOnlyFlags registers fetchFlags on fs. A standalone function
@@ -364,6 +370,7 @@ func registerFetchOnlyFlags(fs *flag.FlagSet) *fetchFlags {
 	fs.BoolVar(&f.sinceLatest, "since-latest", false, "for each point, fetch from its last stored day through yesterday (falls back to just yesterday if nothing is stored yet). Mutually exclusive with -day and -from/-to")
 	fs.StringVar(&f.dataDir, "data-dir", defaultDataDir(), "directory readings are persisted under, one JSON file per provider/point/day (default: $SMARTMETER_DATA_DIR, or \"data\")")
 	fs.BoolVar(&f.printJSON, "json", false, "also print fetched results as JSON to stdout (default: only logged; readings are always persisted to -data-dir)")
+	fs.BoolVar(&f.force, "force", false, "re-fetch and overwrite days already present in -data-dir (default: skip a day once it's stored, since the portal may still revise it, pass -force to re-check)")
 	return f
 }
 
@@ -506,7 +513,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
 			return 2
 		}
-		results, err := fetchPointDays(context.Background(), p, st, plan, prof.label, f.point, "", log)
+		results, err := fetchPointDays(context.Background(), p, st, plan, f.force, prof.label, f.point, "", log)
 		if err != nil {
 			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
 			return 1
@@ -514,7 +521,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		return printFetchResults(stdout, stderr, results, f.printJSON)
 	}
 
-	return runFetchAll(c, plan, st, log, f.printJSON, stdout, stderr)
+	return runFetchAll(c, plan, st, f.force, log, f.printJSON, stdout, stderr)
 }
 
 // fetchResult is one metering point's fetch outcome.
@@ -526,21 +533,44 @@ type fetchResult struct {
 	Day       string `json:"day"`
 	Unit      string `json:"unit"`
 	// FetchedAt is when this fetch attempt ran, in case the portal later
-	// revises "day" (see CLAUDE.md: delayed/amendable data).
-	FetchedAt time.Time          `json:"fetched_at"`
+	// revises "day" (see CLAUDE.md: delayed/amendable data). Zero for a
+	// skipped day (see Skipped) — nothing was actually fetched.
+	FetchedAt time.Time          `json:"fetched_at,omitzero"`
 	Readings  []provider.Reading `json:"readings,omitempty"`
-	Error     string             `json:"error,omitempty"`
+	// Skipped is true when day was already stored and -force wasn't set,
+	// so it was left as-is rather than re-fetched.
+	Skipped bool   `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // fetchPointResult fetches one point's day, persists the readings to st on
-// success, and wraps the outcome (success or error) in a fetchResult,
-// logging either way. Shared by the explicit -point path and
-// runFetchAll's per-point loop, via fetchPointDays.
-func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, profileLabel, pointID, pointName string, day time.Time, log *slog.Logger) fetchResult {
+// success, and wraps the outcome (success, error, or skip) in a
+// fetchResult, logging either way. Unless force is set, a day already
+// present in st is left alone — the portal may still revise it later, so
+// re-checking is opt-in (see the -force flag) rather than automatic.
+// Shared by the explicit -point path and runFetchAll's per-point loop, via
+// fetchPointDays.
+func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, force bool, profileLabel, pointID, pointName string, day time.Time, log *slog.Logger) fetchResult {
 	dayStr := day.Format(dayLayout)
+	res := fetchResult{Profile: profileLabel, Provider: p.Name(), Point: pointID, PointName: pointName, Day: dayStr, Unit: provider.Unit}
+
+	if !force {
+		has, err := st.Has(ctx, p.Name(), pointID, day)
+		if err != nil {
+			log.Error("checking stored data failed", "profile", profileLabel, "point", pointID, "day", dayStr, "error", err)
+			res.Error = err.Error()
+			return res
+		}
+		if has {
+			log.Info("day already stored, skipping (use -force to refetch)", "profile", profileLabel, "point", pointID, "day", dayStr)
+			res.Skipped = true
+			return res
+		}
+	}
+
 	log.Info("fetching day", "provider", p.Name(), "profile", profileLabel, "point", pointID, "day", dayStr)
 	readings, err := p.FetchDay(ctx, pointID, day)
-	res := fetchResult{Profile: profileLabel, Provider: p.Name(), Point: pointID, PointName: pointName, Day: dayStr, Unit: provider.Unit, FetchedAt: time.Now().UTC()}
+	res.FetchedAt = time.Now().UTC()
 	if err != nil {
 		log.Error("fetching day failed", "profile", profileLabel, "point", pointID, "error", err)
 		res.Error = err.Error()
@@ -560,14 +590,14 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 
 // fetchPointDays resolves plan into concrete days for one provider/point
 // and fetches (and persists) each in order.
-func fetchPointDays(ctx context.Context, p provider.Provider, st store.Store, plan fetchPlan, profileLabel, pointID, pointName string, log *slog.Logger) ([]fetchResult, error) {
+func fetchPointDays(ctx context.Context, p provider.Provider, st store.Store, plan fetchPlan, force bool, profileLabel, pointID, pointName string, log *slog.Logger) ([]fetchResult, error) {
 	days, err := plan.days(ctx, st, p.Name(), pointID)
 	if err != nil {
 		return nil, fmt.Errorf("resolving days to fetch for %s: %w", pointID, err)
 	}
 	results := make([]fetchResult, 0, len(days))
 	for _, day := range days {
-		results = append(results, fetchPointResult(ctx, p, st, profileLabel, pointID, pointName, day, log))
+		results = append(results, fetchPointResult(ctx, p, st, force, profileLabel, pointID, pointName, day, log))
 	}
 	return results, nil
 }
@@ -593,7 +623,7 @@ func printFetchResults(stdout, stderr io.Writer, results []fetchResult, printJSO
 // runFetchAll fetches plan's days for every point of every profile resolved
 // by c (see providerFlags.resolveProfiles), continuing past a failed
 // profile or point so one bad login or point doesn't block the rest.
-func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, log *slog.Logger, printJSONOutput bool, stdout, stderr io.Writer) int {
+func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, force bool, log *slog.Logger, printJSONOutput bool, stdout, stderr io.Writer) int {
 	profiles, err := c.resolveProfiles()
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
@@ -605,7 +635,7 @@ func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, log *slog.Log
 		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
 		if err != nil {
 			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
-			results = append(results, fetchResult{Profile: prof.label, Provider: prof.providerName, Unit: provider.Unit, FetchedAt: time.Now().UTC(), Error: err.Error()})
+			results = append(results, fetchResult{Profile: prof.label, Provider: prof.providerName, Unit: provider.Unit, Error: err.Error()})
 			continue
 		}
 
@@ -613,15 +643,15 @@ func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, log *slog.Log
 		points, err := p.ListPoints(context.Background())
 		if err != nil {
 			log.Error("listing metering points failed", "profile", prof.label, "error", err)
-			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Unit: provider.Unit, FetchedAt: time.Now().UTC(), Error: err.Error()})
+			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Unit: provider.Unit, Error: err.Error()})
 			continue
 		}
 
 		for _, pt := range points {
-			ptResults, err := fetchPointDays(context.Background(), p, st, plan, prof.label, pt.ID, pt.Name, log)
+			ptResults, err := fetchPointDays(context.Background(), p, st, plan, force, prof.label, pt.ID, pt.Name, log)
 			if err != nil {
 				log.Error("resolving fetch range failed", "profile", prof.label, "point", pt.ID, "error", err)
-				results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Unit: provider.Unit, FetchedAt: time.Now().UTC(), Error: err.Error()})
+				results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Unit: provider.Unit, Error: err.Error()})
 				continue
 			}
 			results = append(results, ptResults...)
