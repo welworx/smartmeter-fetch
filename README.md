@@ -47,6 +47,7 @@ smartmeter-fetch fetch -point <id> -from 2024-01-01 -to 2024-01-31  # date range
 smartmeter-fetch fetch -point <id> -from -30 -to -20                # or days before today; -to defaults to today
 smartmeter-fetch fetch -since-latest                      # resume every point from its last stored day
 smartmeter-fetch fetch -point <id> -day 2024-01-15 -log-level debug
+smartmeter-fetch fetch -point <id> -day 2024-01-15 -verbose         # shorthand for -log-level debug
 ```
 
 Credentials can also be stored once, encrypted under a master passphrase
