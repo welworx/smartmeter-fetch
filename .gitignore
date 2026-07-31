@@ -31,3 +31,6 @@ docs/superpowers/
 
 # Fetched smart meter data (JSON store default location)
 /data/
+
+# graphify output — generated knowledge graph, not published repo content
+/graphify-out/

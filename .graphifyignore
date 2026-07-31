@@ -1,0 +1,4 @@
+# Claude Code's own tooling directory — agent settings, job state, worktrees.
+# Not project source; graphify-out/ is already self-excluded, and .gitignore
+# already covers .superpowers/, docs/superpowers/, /data/, and build/IDE noise.
+.claude/
