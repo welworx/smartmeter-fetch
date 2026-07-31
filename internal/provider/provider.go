@@ -22,6 +22,10 @@ type Reading struct {
 	ValueWh   float64
 }
 
+// Unit is the unit of measurement of every Reading.ValueWh, for every
+// provider.
+const Unit = "Wh"
+
 // Provider fetches readings from one grid operator's web portal.
 type Provider interface {
 	// Name identifies this provider, e.g. "evn".

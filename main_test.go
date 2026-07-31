@@ -135,8 +135,8 @@ func TestRun_Fetch_NoPointFetchesEveryPointOfDirectLogin(t *testing.T) {
 		t.Fatalf("results = %+v, want 2 (one per point)", got)
 	}
 	for i, id := range []string{"AT001", "AT002"} {
-		if got[i].Point != id || got[i].Profile != "" || len(got[i].Readings) != 1 {
-			t.Errorf("results[%d] = %+v, want point %q with 1 reading", i, got[i], id)
+		if got[i].Point != id || got[i].Profile != "" || got[i].Unit != provider.Unit || len(got[i].Readings) != 1 {
+			t.Errorf("results[%d] = %+v, want point %q with unit %q and 1 reading", i, got[i], id, provider.Unit)
 		}
 	}
 }

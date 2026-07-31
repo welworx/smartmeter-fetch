@@ -377,6 +377,7 @@ type fetchResult struct {
 	Point     string             `json:"point,omitempty"`
 	PointName string             `json:"point_name,omitempty"`
 	Day       string             `json:"day"`
+	Unit      string             `json:"unit"`
 	Readings  []provider.Reading `json:"readings,omitempty"`
 	Error     string             `json:"error,omitempty"`
 }
@@ -406,14 +407,14 @@ func runFetchAll(c *providerFlags, day time.Time, dayStr string, log *slog.Logge
 		points, err := p.ListPoints(context.Background())
 		if err != nil {
 			log.Error("listing metering points failed", "profile", prof.label, "error", err)
-			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Day: dayStr, Error: err.Error()})
+			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Day: dayStr, Unit: provider.Unit, Error: err.Error()})
 			failed = true
 			continue
 		}
 
 		for _, pt := range points {
 			log.Info("fetching day", "provider", p.Name(), "profile", prof.label, "point", pt.ID, "day", dayStr)
-			res := fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Day: dayStr}
+			res := fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Day: dayStr, Unit: provider.Unit}
 			readings, err := p.FetchDay(context.Background(), pt.ID, day)
 			if err != nil {
 				log.Error("fetching day failed", "profile", prof.label, "point", pt.ID, "error", err)
