@@ -164,6 +164,7 @@ type providerFlags struct {
 	profile   string
 	userAgent string
 	logLevel  string
+	verbose   bool
 }
 
 // defaultProviderName is used when a stored profile predates the Provider
@@ -177,6 +178,8 @@ func (c *providerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.profile, "profile", "", "name of a stored profile to use instead of -user/-password/-provider (see: smartmeter-fetch profile add); default: first configured profile")
 	fs.StringVar(&c.userAgent, "user-agent", "", "User-Agent header sent to the portal (default: a browser-like UA; some portals reject Go's default)")
 	fs.StringVar(&c.logLevel, "log-level", "info", "log level: debug (also logs request URLs and auth events), info, warn, or error")
+	fs.BoolVar(&c.verbose, "v", false, "shorthand for -log-level debug (wins if both are set)")
+	fs.BoolVar(&c.verbose, "verbose", false, "shorthand for -log-level debug (wins if both are set)")
 }
 
 // providerFactories maps a -provider name to its constructor. A map keeps
@@ -292,6 +295,15 @@ func parseLogLevel(s string) (slog.Level, error) {
 	return level, nil
 }
 
+// resolveLogLevel is parseLogLevel plus -v/-verbose, which forces debug
+// regardless of -log-level.
+func resolveLogLevel(c *providerFlags) (slog.Level, error) {
+	if c.verbose {
+		return slog.LevelDebug, nil
+	}
+	return parseLogLevel(c.logLevel)
+}
+
 func newLogger(level slog.Level, w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
 }
@@ -317,7 +329,7 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 		return exitCodeForParseErr(err)
 	}
 
-	level, err := parseLogLevel(c.logLevel)
+	level, err := resolveLogLevel(c)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: -log-level %q: %v\n", c.logLevel, err)
 		return 2
@@ -325,7 +337,7 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 	log := newLogger(level, stderr)
 	p, err := c.newProvider(log)
 	if err != nil {
-		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+		log.Error("creating provider failed", "error", err)
 		return 2
 	}
 
@@ -504,34 +516,35 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		return exitCodeForParseErr(err)
 	}
 
-	plan, err := parseFetchPlan(f)
-	if err != nil {
-		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
-		return 2
-	}
-	level, err := parseLogLevel(c.logLevel)
+	level, err := resolveLogLevel(c)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: -log-level %q: %v\n", c.logLevel, err)
 		return 2
 	}
 	log := newLogger(level, stderr)
+
+	plan, err := parseFetchPlan(f)
+	if err != nil {
+		log.Error("invalid fetch flags", "error", err)
+		return 2
+	}
 	st := jsonfile.New(f.dataDir)
 
 	if f.point != "" {
 		profiles, err := c.resolveProfiles()
 		if err != nil {
-			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			log.Error("resolving profiles failed", "error", err)
 			return 2
 		}
 		prof := profiles[0]
 		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
 		if err != nil {
-			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			log.Error("creating provider failed", "error", err)
 			return 2
 		}
 		results, err := fetchPointDays(context.Background(), p, st, plan, f.force, prof.label, f.point, "", log)
 		if err != nil {
-			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			log.Error("fetch failed", "point", f.point, "error", err)
 			return 1
 		}
 		return printFetchResults(stdout, stderr, results, f.printJSON)
@@ -642,7 +655,7 @@ func printFetchResults(stdout, stderr io.Writer, results []fetchResult, printJSO
 func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, force bool, log *slog.Logger, printJSONOutput bool, stdout, stderr io.Writer) int {
 	profiles, err := c.resolveProfiles()
 	if err != nil {
-		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+		log.Error("resolving profiles failed", "error", err)
 		return 2
 	}
 
@@ -650,7 +663,7 @@ func runFetchAll(c *providerFlags, plan fetchPlan, st store.Store, force bool, l
 	for _, prof := range profiles {
 		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
 		if err != nil {
-			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			log.Error("creating provider failed", "profile", prof.label, "error", err)
 			results = append(results, fetchResult{Profile: prof.label, Provider: prof.providerName, Unit: provider.Unit, Error: err.Error()})
 			continue
 		}

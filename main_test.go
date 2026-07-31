@@ -70,7 +70,7 @@ func TestRun_Help(t *testing.T) {
 	// that can drift from the real flags.
 	for _, want := range []string{
 		"-provider", `default "evn"`,
-		"-user", "-password", "-user-agent", "-log-level",
+		"-user", "-password", "-user-agent", "-log-level", "-verbose",
 		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json", "-force",
 	} {
 		if !strings.Contains(out, want) {
@@ -290,7 +290,10 @@ func TestRun_Fetch_UnknownProfile(t *testing.T) {
 	if code != 2 {
 		t.Errorf("run(list-points, unknown profile) = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), `no profile "ghost"`) {
+	// slog's text handler quotes/escapes attribute values (correct for
+	// machine-parseable logs), so match substrings rather than the raw
+	// quoted phrase.
+	if !strings.Contains(stderr.String(), "no profile") || !strings.Contains(stderr.String(), "ghost") {
 		t.Errorf("stderr = %q, want unknown profile message", stderr.String())
 	}
 }
@@ -301,8 +304,11 @@ func TestRun_Fetch_UnknownProvider(t *testing.T) {
 	if code != 2 {
 		t.Errorf("run(fetch, unknown provider) = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), `unknown provider "bogus"`) {
+	if !strings.Contains(stderr.String(), "unknown provider") || !strings.Contains(stderr.String(), "bogus") {
 		t.Errorf("stderr = %q, want unknown provider message", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("stderr = %q, want a structured log line (level=ERROR), not a bare print", stderr.String())
 	}
 }
 
@@ -328,6 +334,20 @@ func TestRun_ListPoints(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "listed metering points") {
 		t.Errorf("stderr = %q, want debug log output with -log-level debug", stderr.String())
+	}
+}
+
+func TestRun_ListPoints_VerboseForcesDebugLevel(t *testing.T) {
+	withStubProvider(t, &stubProvider{points: []provider.Point{{ID: "AT001", Name: "Verbrauch"}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"list-points", "-verbose"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(list-points, -verbose) = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "listed metering points") {
+		t.Errorf("stderr = %q, want debug log output with -verbose", stderr.String())
 	}
 }
 
@@ -468,6 +488,9 @@ func TestRun_Fetch_DayAndFromAreMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "mutually exclusive") {
 		t.Errorf("stderr = %q, want mutual-exclusivity error", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("stderr = %q, want a structured log line (level=ERROR), not a bare print", stderr.String())
 	}
 }
 
