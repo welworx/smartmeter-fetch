@@ -37,6 +37,8 @@ type Provider struct {
 	loggedIn   bool
 }
 
+var _ provider.Provider = (*Provider)(nil)
+
 // New creates a Provider that authenticates with the given portal
 // credentials on first use.
 func New(username, password string) *Provider {
