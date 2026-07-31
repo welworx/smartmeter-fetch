@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/welworx/smartmeter-fetch/internal/config"
@@ -67,6 +68,10 @@ Examples:
 
   # Fetch a date range instead of a single day
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -from 2024-01-01 -to 2024-01-31
+
+  # -from/-to also accept a number of days before today, e.g. 30 days ago
+  # through 20 days ago; omitting -to defaults it to today
+  smartmeter-fetch fetch -point AT0020000000000000000000100123456 -from -30 -to -20
 
   # Resume each point from its last stored day through yesterday (falls
   # back to just yesterday the first time, before anything is stored);
@@ -365,8 +370,8 @@ func registerFetchOnlyFlags(fs *flag.FlagSet) *fetchFlags {
 	f := &fetchFlags{}
 	fs.StringVar(&f.point, "point", "", "metering point ID (default: every point of -profile, or of every configured profile if -profile is also omitted; see list-points)")
 	fs.StringVar(&f.day, "day", "", "date to fetch, YYYY-MM-DD (default: yesterday). Mutually exclusive with -from/-to and -since-latest")
-	fs.StringVar(&f.from, "from", "", "start of an inclusive date range to fetch, YYYY-MM-DD (requires -to)")
-	fs.StringVar(&f.to, "to", "", "end of an inclusive date range to fetch, YYYY-MM-DD (requires -from)")
+	fs.StringVar(&f.from, "from", "", "start of an inclusive date range to fetch: YYYY-MM-DD, or a negative number of days before today, e.g. -30 (see -to)")
+	fs.StringVar(&f.to, "to", "", "end of an inclusive date range to fetch: YYYY-MM-DD, or a negative number of days before today, e.g. -20 (default: today, if -from is set)")
 	fs.BoolVar(&f.sinceLatest, "since-latest", false, "for each point, fetch from its last stored day through yesterday (falls back to just yesterday if nothing is stored yet). Mutually exclusive with -day and -from/-to")
 	fs.StringVar(&f.dataDir, "data-dir", defaultDataDir(), "directory readings are persisted under, one JSON file per provider/point/day (default: $SMARTMETER_DATA_DIR, or \"data\")")
 	fs.BoolVar(&f.printJSON, "json", false, "also print fetched results as JSON to stdout (default: only logged; readings are always persisted to -data-dir)")
@@ -384,7 +389,7 @@ func newFetchFlagSet(out io.Writer) (fs *flag.FlagSet, c *providerFlags, f *fetc
 	c.register(fs)
 	f = registerFetchOnlyFlags(fs)
 	fs.Usage = func() {
-		fmt.Fprint(out, "Fetch smart meter readings for a metering point and persist them.\n\nUsage:\n  smartmeter-fetch fetch [-point <id>] [-day <YYYY-MM-DD> | -from <YYYY-MM-DD> -to <YYYY-MM-DD> | -since-latest] [flags]\n\nFlags:\n")
+		fmt.Fprint(out, "Fetch smart meter readings for a metering point and persist them.\n\nUsage:\n  smartmeter-fetch fetch [-point <id>] [-day <YYYY-MM-DD> | -from <YYYY-MM-DD|-N> [-to <YYYY-MM-DD|-N>] | -since-latest] [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	return fs, c, f
@@ -395,6 +400,17 @@ const dayLayout = "2006-01-02"
 func parseDay(s string) (time.Time, error) { return time.Parse(dayLayout, s) }
 
 func yesterday() time.Time { return time.Now().AddDate(0, 0, -1) }
+
+// parseDayOrOffset parses s as either an absolute YYYY-MM-DD date or, if it's
+// a plain integer, a number of days relative to today (e.g. "-30" for 30
+// days ago) — used by -from/-to so a range can be given relative to "now"
+// without computing dates by hand.
+func parseDayOrOffset(s string) (time.Time, error) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return time.Now().AddDate(0, 0, n), nil
+	}
+	return parseDay(s)
+}
 
 // fetchPlan is the validated, parsed form of fetchFlags' mutually exclusive
 // day-selection flags (-day, -from/-to, -since-latest).
@@ -421,16 +437,19 @@ func parseFetchPlan(f *fetchFlags) (fetchPlan, error) {
 	case f.sinceLatest:
 		return fetchPlan{mode: "since-latest"}, nil
 	case f.from != "" || f.to != "":
-		if f.from == "" || f.to == "" {
-			return fetchPlan{}, errors.New("-from and -to must be set together")
+		if f.from == "" {
+			return fetchPlan{}, errors.New("-to requires -from")
 		}
-		from, err := parseDay(f.from)
+		from, err := parseDayOrOffset(f.from)
 		if err != nil {
 			return fetchPlan{}, fmt.Errorf("-from %q: %w", f.from, err)
 		}
-		to, err := parseDay(f.to)
-		if err != nil {
-			return fetchPlan{}, fmt.Errorf("-to %q: %w", f.to, err)
+		to := time.Now()
+		if f.to != "" {
+			to, err = parseDayOrOffset(f.to)
+			if err != nil {
+				return fetchPlan{}, fmt.Errorf("-to %q: %w", f.to, err)
+			}
 		}
 		if to.Before(from) {
 			return fetchPlan{}, fmt.Errorf("-to %s is before -from %s", f.to, f.from)

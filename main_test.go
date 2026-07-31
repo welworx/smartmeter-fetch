@@ -433,14 +433,30 @@ func TestRun_Fetch_DateRange(t *testing.T) {
 	}
 }
 
-func TestRun_Fetch_FromRequiresTo(t *testing.T) {
+func TestRun_Fetch_FromAbsoluteDateDefaultsToToday(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	from := time.Now().AddDate(0, 0, -1)
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-point", "AT001", "-from", "2024-01-15", "-user", "u", "-password", "p"}, &stdout, &stderr)
-	if code != 2 {
-		t.Errorf("run(fetch, -from without -to) = %d, want 2", code)
+	code := run([]string{"fetch", "-point", "AT001", "-from", from.Format(dayLayout), "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from without -to) = %d, stderr = %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "-from and -to must be set together") {
-		t.Errorf("stderr = %q, want -from/-to pairing error", stderr.String())
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	wantDays := []string{from.Format(dayLayout), time.Now().Format(dayLayout)}
+	if len(got) != len(wantDays) {
+		t.Fatalf("results = %+v, want %d days (-from through today)", got, len(wantDays))
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
 	}
 }
 
@@ -452,6 +468,87 @@ func TestRun_Fetch_DayAndFromAreMutuallyExclusive(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "mutually exclusive") {
 		t.Errorf("stderr = %q, want mutual-exclusivity error", stderr.String())
+	}
+}
+
+func TestRun_Fetch_OffsetRange(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-2", "-to", "-1", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from/-to as offsets) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("results = %+v, want 2 (one per day, offsets -2 and -1)", got)
+	}
+	wantDays := []string{
+		time.Now().AddDate(0, 0, -2).Format(dayLayout),
+		time.Now().AddDate(0, 0, -1).Format(dayLayout),
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_OffsetFromDefaultsToWithoutTo(t *testing.T) {
+	withStubProvider(t, &stubProvider{readings: []provider.Reading{{Timestamp: time.Now(), Value: 1}}})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+	t.Setenv("SMARTMETER_DATA_DIR", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-2", "-json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, -from offset without -to) = %d, stderr = %s", code, stderr.String())
+	}
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	wantDays := []string{
+		time.Now().AddDate(0, 0, -2).Format(dayLayout),
+		time.Now().AddDate(0, 0, -1).Format(dayLayout),
+		time.Now().Format(dayLayout),
+	}
+	if len(got) != len(wantDays) {
+		t.Fatalf("results = %+v, want %d days (-from through today)", got, len(wantDays))
+	}
+	for i, day := range wantDays {
+		if got[i].Day != day {
+			t.Errorf("results[%d].Day = %q, want %q", i, got[i].Day, day)
+		}
+	}
+}
+
+func TestRun_Fetch_ToWithoutFromErrors(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-to", "-1", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(fetch, -to without -from) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "-to requires -from") {
+		t.Errorf("stderr = %q, want -to-requires-from error", stderr.String())
+	}
+}
+
+func TestRun_Fetch_ToBeforeFromErrors(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001", "-from", "-1", "-to", "-30", "-user", "u", "-password", "p"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("run(fetch, -to before -from) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "is before") {
+		t.Errorf("stderr = %q, want -to-before-from error", stderr.String())
 	}
 }
 

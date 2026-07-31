@@ -43,6 +43,8 @@ export SMARTMETER_PASSWORD=hunter2
 
 smartmeter-fetch list-points
 smartmeter-fetch fetch -point <id> -day 2024-01-15
+smartmeter-fetch fetch -point <id> -from 2024-01-01 -to 2024-01-31  # date range
+smartmeter-fetch fetch -point <id> -from -30 -to -20                # or days before today; -to defaults to today
 smartmeter-fetch fetch -since-latest                      # resume every point from its last stored day
 smartmeter-fetch fetch -point <id> -day 2024-01-15 -log-level debug
 ```
