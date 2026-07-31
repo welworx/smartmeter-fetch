@@ -91,6 +91,17 @@ Examples:
   # Debug logging (auth events + request URLs)
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -log-level debug
 
+  # Get a day's readings back, printed as a table (fetches first if not
+  # already stored)
+  smartmeter-fetch get -point AT0020000000000000000000100123456 -day 2024-01-15
+
+  # Get a year, aggregated to daily totals, as CSV to stdout
+  smartmeter-fetch get -point AT0020000000000000000000100123456 -from -365 -sample day -format csv
+
+  # Export every point of every profile to one CSV per point per year,
+  # without real Zählpunkt IDs in the file paths
+  smartmeter-fetch get -sample day -out "data/<profile>/<zaehlerpunkt_id>/<yyyy>.csv"
+
   # Override the User-Agent sent to the portal
   smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
 

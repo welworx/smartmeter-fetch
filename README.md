@@ -23,12 +23,14 @@ stores, it doesn't know or care about Home Assistant.
 ## Status
 
 The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
-(`list-points`, `fetch`, `profile`) are implemented. `fetch` persists
-readings to `-data-dir` (one JSON file per provider/point/day) and, by
-default, only logs what it did rather than printing readings to stdout
-(pass `-json` for that). A day already present in `-data-dir` is skipped
-rather than re-fetched, unless `-force` is passed. The query API is not
-yet implemented.
+(`list-points`, `fetch`, `get`, `profile`) are implemented. `fetch`
+persists readings to `-data-dir` without printing them by default (pass
+`-json` for that). `get` ensures a date range is fetched, then reads it
+back — as a table, JSON, or CSV, optionally aggregated (`-sample
+hour|day|week|month|quarter`) and optionally exported to templated file(s)
+via `-out`. A day already present in `-data-dir` is skipped rather than
+re-fetched, unless `-force` is passed. The query API is not yet
+implemented.
 
 Each reading carries a `quality` code when the portal reports one: `L2`
 (substitute value, final) or `L3` (substitute value, still provisional —
@@ -48,6 +50,9 @@ smartmeter-fetch fetch -point <id> -from -30 -to -20                # or days be
 smartmeter-fetch fetch -since-latest                      # resume every point from its last stored day
 smartmeter-fetch fetch -point <id> -day 2024-01-15 -log-level debug
 smartmeter-fetch fetch -point <id> -day 2024-01-15 -verbose         # shorthand for -log-level debug
+smartmeter-fetch get -point <id> -day 2024-01-15                          # read back a day (fetches first if needed)
+smartmeter-fetch get -point <id> -from -365 -sample day -format csv       # a year of daily totals as CSV
+smartmeter-fetch get -sample day -out "data/<profile>/<zaehlerpunkt_id>/<yyyy>.csv"  # export every point/year, no real IDs in paths
 ```
 
 Credentials can also be stored once, encrypted under a master passphrase

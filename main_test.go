@@ -72,6 +72,7 @@ func TestRun_Help(t *testing.T) {
 		"-provider", `default "evn"`,
 		"-user", "-password", "-user-agent", "-log-level", "-verbose",
 		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json", "-force",
+		"get", "-sample", "-format", "-out",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n---\n%s", want, out)
