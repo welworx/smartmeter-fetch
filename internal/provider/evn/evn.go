@@ -16,6 +16,7 @@ import (
 
 const defaultBaseURL = "https://smartmeter.netz-noe.at"
 
+//nolint:unused // referenced starting Task 4 (FetchDay)
 var viennaLocation = func() *time.Location {
 	loc, err := time.LoadLocation("Europe/Vienna")
 	if err != nil {
