@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/welworx/smartmeter-fetch/internal/atomicfile"
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
@@ -77,19 +78,7 @@ func writeAtomic(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op once the rename below succeeds
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteFile(path, data)
 }
 
 // Get returns every stored reading for providerName/pointID with a
