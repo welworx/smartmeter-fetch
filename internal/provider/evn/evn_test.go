@@ -314,8 +314,8 @@ func TestProvider_FetchDay(t *testing.T) {
 	if readings[0].Value != 1000 {
 		t.Errorf("readings[0].Value = %v, want 1000 (1.0 kWh metered)", readings[0].Value)
 	}
-	if readings[0].Quality != "L1" {
-		t.Errorf("readings[0].Quality = %q, want L1 (measured)", readings[0].Quality)
+	if readings[0].Quality != "" {
+		t.Errorf("readings[0].Quality = %q, want empty (measured values don't get a quality code, see dayRecord's ponytail note)", readings[0].Quality)
 	}
 
 	wantSecond := wantFirst.Add(15 * time.Minute)

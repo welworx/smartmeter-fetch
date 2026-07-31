@@ -215,15 +215,17 @@ type dayRecord struct {
 	Metered []*float64 `json:"meteredValues"`
 	// Estimated and EstimatedQualities are the portal's substitute values
 	// for intervals with no measured reading yet, and each one's quality
-	// code ("L2" final, "L3" still provisional). A measured value is
-	// always "L1" and carries no separate quality entry.
+	// code ("L2" final, "L3" still provisional).
+	//
+	// ponytail: the portal's own UI labels a measured value "L1", but the
+	// API response never carries that code anywhere we've observed (no
+	// per-interval field alongside meteredValues) - only estimatedValues
+	// get an explicit quality. Rather than hardcode "L1" on an assumption,
+	// Reading.Quality is left empty for measured values for now. Revisit
+	// if a captured response ever shows otherwise.
 	Estimated          []*float64 `json:"estimatedValues"`
 	EstimatedQualities []*string  `json:"estimatedQualities"`
 }
-
-const (
-	qualityMeasured = "L1"
-)
 
 // FetchDay implements provider.Provider.
 // FetchDay uses day's calendar date (Year/Month/Day) as-is, in whatever location day's *time.Time carries;
@@ -270,7 +272,6 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 			readings = append(readings, provider.Reading{
 				Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
 				Value:     *value * 1000,
-				Quality:   qualityMeasured,
 			})
 			continue
 		}

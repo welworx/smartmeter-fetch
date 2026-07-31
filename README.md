@@ -27,6 +27,13 @@ The EVN/Netz NÖ provider and a CLI to drive it (`list-points`, `fetch`,
 implemented, so `fetch` currently prints readings as JSON rather than
 persisting them.
 
+Each reading carries a `quality` code when the portal reports one: `L2`
+(substitute value, final) or `L3` (substitute value, still provisional —
+may change on a later fetch). Measured values leave `quality` empty for
+now — the portal's own UI calls these `L1`, but that code isn't present
+anywhere in the API response, only inferred from context, so it isn't
+hardcoded; see `internal/provider/evn/evn.go`'s `dayRecord` comment.
+
 ```bash
 export SMARTMETER_USER=you@example.com
 export SMARTMETER_PASSWORD=hunter2
