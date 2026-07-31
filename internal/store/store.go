@@ -23,4 +23,10 @@ type Store interface {
 	// the last timestamp they successfully consumed, not from a fixed
 	// offset from "now".
 	Get(ctx context.Context, providerName, pointID string, since time.Time) ([]provider.Reading, error)
+
+	// Latest returns the day of the most recent readings stored for one
+	// provider/point, so a caller can resume fetching from there instead
+	// of from a fixed offset from "now". found is false if nothing has
+	// been stored yet for that provider/point.
+	Latest(ctx context.Context, providerName, pointID string) (day time.Time, found bool, err error)
 }
