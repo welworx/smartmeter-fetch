@@ -85,15 +85,15 @@ func applyProfileFields(secrets []config.Profile, idx int, providerName, usernam
 
 // testLogin verifies username/password against providerName's portal by
 // actually logging in (ListPoints forces a login internally). Used by
-// "profile add"/"profile update" so a typo'd password is never silently
-// stored.
+// "profile add"/"profile update" (so a typo'd password is never silently
+// stored) and "profile verify" (to recheck credentials already stored).
 func testLogin(ctx context.Context, providerName, username, password string) error {
 	factory, ok := providerFactories[providerName]
 	if !ok {
 		return fmt.Errorf("unknown provider %q (only \"evn\" is supported)", providerName)
 	}
 	if _, err := factory(username, password, "", nil).ListPoints(ctx); err != nil {
-		return fmt.Errorf("login to %s failed, not saving: %w", providerName, err)
+		return fmt.Errorf("login to %s failed: %w", providerName, err)
 	}
 	return nil
 }
@@ -179,8 +179,25 @@ Usage:
   smartmeter-fetch profile list                            list configured profiles (name, provider, username)
   smartmeter-fetch profile update <name> [-provider evn]   change a profile's provider/username/password (blank keeps current)
   smartmeter-fetch profile remove <name>                   remove a profile
+  smartmeter-fetch profile verify [name]                   log into the portal with each stored profile (or just
+                                                             one, by name) to check its credentials are still valid
   smartmeter-fetch profile passphrase                      change the master passphrase (re-encrypts everything)
 `)
+}
+
+// profileVerify logs into each profile's portal with its stored credentials
+// and reports OK/FAILED to stdout, one line per profile. Returns the number
+// that failed, so callers can pick an exit code without re-deriving it.
+func profileVerify(ctx context.Context, stdout io.Writer, profiles []config.Profile) (failed int) {
+	for _, p := range profiles {
+		if err := testLogin(ctx, providerOrDefault(p.Provider), p.Username, p.Password); err != nil {
+			fmt.Fprintf(stdout, "%s\tFAILED\t%v\n", p.Name, err)
+			failed++
+			continue
+		}
+		fmt.Fprintf(stdout, "%s\tOK\n", p.Name)
+	}
+	return failed
 }
 
 // runProfile handles `smartmeter-fetch profile <add|list|update|remove|passphrase> ...`.
@@ -310,6 +327,43 @@ func runProfile(args []string, stdout, stderr io.Writer) int {
 		}
 		for _, p := range secrets {
 			fmt.Fprintf(stdout, "%s\t%s\t%s\n", p.Name, providerOrDefault(p.Provider), p.Username)
+		}
+		return 0
+	case "verify":
+		if len(args) > 2 {
+			printProfileUsage(stderr)
+			return 2
+		}
+		if !config.CredentialsExist(dir) {
+			return 0
+		}
+		pass, err := readPassphrase(false)
+		if err != nil {
+			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
+			return 1
+		}
+		secrets, err := config.LoadSecrets(dir, pass)
+		if err != nil {
+			fmt.Fprintln(stderr, "smartmeter-fetch:", err)
+			return 1
+		}
+		if len(args) == 2 {
+			name := args[1]
+			idx := -1
+			for i, p := range secrets {
+				if p.Name == name {
+					idx = i
+					break
+				}
+			}
+			if idx == -1 {
+				fmt.Fprintf(stderr, "smartmeter-fetch: no profile %q\n", name)
+				return 1
+			}
+			secrets = secrets[idx : idx+1]
+		}
+		if profileVerify(context.Background(), stdout, secrets) > 0 {
+			return 1
 		}
 		return 0
 	case "remove":

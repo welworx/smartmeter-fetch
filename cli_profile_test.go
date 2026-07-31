@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/welworx/smartmeter-fetch/internal/config"
+	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
 // isolateConfigDir points config.Dir() at a fresh temp directory for the
@@ -359,6 +361,137 @@ func TestRunProfileListWrongPassphrase(t *testing.T) {
 	t.Setenv("SMARTMETER_PASSPHRASE", "wrong")
 	if got := runProfile([]string{"list"}, &stdout, &stderr); got != 1 {
 		t.Fatalf("runProfile(list) with wrong passphrase = %d, want 1", got)
+	}
+}
+
+func TestRunProfileVerifyEmptyNoPrompt(t *testing.T) {
+	isolateConfigDir(t)
+	// No SMARTMETER_PASSPHRASE set, and no credentials.enc yet: must not
+	// try to prompt.
+	var stdout, stderr bytes.Buffer
+	if got := runProfile([]string{"verify"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("runProfile(verify) on empty dir = %d, want 0", got)
+	}
+}
+
+func TestRunProfileVerifyAllOK(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+	t.Setenv("SMARTMETER_USER", "bob")
+	t.Setenv("SMARTMETER_PASSWORD", "pw2")
+	runProfile([]string{"add", "second"}, &stdout, &stderr)
+
+	stdout.Reset()
+	if got := runProfile([]string{"verify"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("runProfile(verify) = %d, want 0, stderr = %s", got, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "main\tOK") || !strings.Contains(out, "second\tOK") {
+		t.Fatalf("stdout = %q, want both profiles OK", out)
+	}
+}
+
+// TestRunProfileVerifyReportsFailureButChecksAll covers finding: a rejected
+// login for one profile must not stop the others from being checked, and
+// the overall exit code must still reflect the failure.
+func TestRunProfileVerifyReportsFailureButChecksAll(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+	t.Setenv("SMARTMETER_USER", "bob")
+	t.Setenv("SMARTMETER_PASSWORD", "pw2")
+	runProfile([]string{"add", "second"}, &stdout, &stderr)
+
+	// Only "bob"'s login now fails.
+	orig := providerFactories["evn"]
+	providerFactories["evn"] = func(user, password, userAgent string, logger *slog.Logger) provider.Provider {
+		if user == "bob" {
+			return &stubProvider{err: errStub}
+		}
+		return &stubProvider{}
+	}
+	t.Cleanup(func() { providerFactories["evn"] = orig })
+
+	stdout.Reset()
+	if got := runProfile([]string{"verify"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(verify) = %d, want 1", got)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "main\tOK") {
+		t.Errorf("stdout = %q, want main OK", out)
+	}
+	if !strings.Contains(out, "second\tFAILED") {
+		t.Errorf("stdout = %q, want second FAILED", out)
+	}
+}
+
+func TestRunProfileVerifyByName(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+	t.Setenv("SMARTMETER_USER", "bob")
+	t.Setenv("SMARTMETER_PASSWORD", "pw2")
+	runProfile([]string{"add", "second"}, &stdout, &stderr)
+
+	stdout.Reset()
+	if got := runProfile([]string{"verify", "main"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("runProfile(verify main) = %d, want 0, stderr = %s", got, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "main\tOK") {
+		t.Errorf("stdout = %q, want main OK", out)
+	}
+	if strings.Contains(out, "second") {
+		t.Errorf("stdout = %q, want only main checked", out)
+	}
+}
+
+func TestRunProfileVerifyUnknownName(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+
+	if got := runProfile([]string{"verify", "ghost"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(verify ghost) = %d, want 1", got)
+	}
+}
+
+func TestRunProfileVerifyWrongPassphrase(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "right")
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	withStubProvider(t, &stubProvider{})
+	var stdout, stderr bytes.Buffer
+	runProfile([]string{"add", "main"}, &stdout, &stderr)
+
+	t.Setenv("SMARTMETER_PASSPHRASE", "wrong")
+	if got := runProfile([]string{"verify"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("runProfile(verify) with wrong passphrase = %d, want 1", got)
+	}
+}
+
+func TestRunProfileVerifyUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if got := runProfile([]string{"verify", "main", "extra"}, &stdout, &stderr); got != 2 {
+		t.Fatalf("runProfile(verify) with extra args = %d, want 2", got)
 	}
 }
 

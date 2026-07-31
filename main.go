@@ -61,6 +61,9 @@ Examples:
 
   # Override the User-Agent sent to the portal
   smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
+
+  # Recheck stored credentials are still accepted by the portal
+  smartmeter-fetch profile verify
 `
 
 // printUsage writes the full help text: commands, every flag with its
