@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
@@ -184,5 +185,88 @@ func TestProvider_ListPoints(t *testing.T) {
 	}
 	if len(points) != len(want) || points[0] != want[0] {
 		t.Errorf("ListPoints() = %+v, want %+v", points, want)
+	}
+}
+
+func TestProvider_FetchDay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/orchestration/ConsumptionRecord/Day":
+			if got := r.URL.Query().Get("meterId"); got != "AT0020000000000000000000100123456" {
+				t.Fatalf("meterId = %q, want AT0020000000000000000000100123456", got)
+			}
+			if got := r.URL.Query().Get("day"); got != "2024-01-15" {
+				t.Fatalf("day = %q, want 2024-01-15 (zero-padded)", got)
+			}
+			w.Write([]byte(`[
+				{
+					"ec_id": "some-community",
+					"meteredValues": [99.0]
+				},
+				{
+					"ec_id": null,
+					"meteredValues": [1.0, null, null],
+					"estimatedValues": [null, 2.0, null]
+				}
+			]`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	day := time.Date(2024, time.January, 15, 0, 0, 0, 0, time.UTC)
+	readings, err := p.FetchDay(context.Background(), "AT0020000000000000000000100123456", day)
+	if err != nil {
+		t.Fatalf("FetchDay() error = %v", err)
+	}
+
+	if len(readings) != 2 {
+		t.Fatalf("FetchDay() returned %d readings, want 2 (null/null interval skipped)", len(readings))
+	}
+
+	// Vienna is UTC+1 in January (no DST): local midnight 2024-01-15T00:00 CET
+	// = 2024-01-14T23:00:00Z.
+	wantFirst := time.Date(2024, time.January, 14, 23, 0, 0, 0, time.UTC)
+	if !readings[0].Timestamp.Equal(wantFirst) {
+		t.Errorf("readings[0].Timestamp = %v, want %v", readings[0].Timestamp, wantFirst)
+	}
+	if readings[0].ValueWh != 1000 {
+		t.Errorf("readings[0].ValueWh = %v, want 1000 (1.0 kWh metered)", readings[0].ValueWh)
+	}
+
+	wantSecond := wantFirst.Add(15 * time.Minute)
+	if !readings[1].Timestamp.Equal(wantSecond) {
+		t.Errorf("readings[1].Timestamp = %v, want %v", readings[1].Timestamp, wantSecond)
+	}
+	if readings[1].ValueWh != 2000 {
+		t.Errorf("readings[1].ValueWh = %v, want 2000 (2.0 kWh estimated fallback)", readings[1].ValueWh)
+	}
+}
+
+func TestProvider_FetchDay_NoTotalRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/orchestration/Authentication/Login":
+			w.WriteHeader(http.StatusOK)
+		case "/orchestration/ConsumptionRecord/Day":
+			w.Write([]byte(`[{"ec_id": "some-community", "meteredValues": [1.0]}]`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := New("user", "pass")
+	p.baseURL = server.URL
+
+	_, err := p.FetchDay(context.Background(), "some-point", time.Date(2024, time.January, 15, 0, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("FetchDay() error = nil, want error when no ec_id:null record is present")
 	}
 }

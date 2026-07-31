@@ -20,7 +20,6 @@ import (
 
 const defaultBaseURL = "https://smartmeter.netz-noe.at"
 
-//nolint:unused // referenced starting Task 4 (FetchDay)
 var viennaLocation = func() *time.Location {
 	loc, err := time.LoadLocation("Europe/Vienna")
 	if err != nil {
@@ -177,4 +176,55 @@ func (p *Provider) ListPoints(ctx context.Context) ([]provider.Point, error) {
 		}
 	}
 	return points, nil
+}
+
+type dayRecord struct {
+	ECID            *string    `json:"ec_id"`
+	MeteredValues   []*float64 `json:"meteredValues"`
+	EstimatedValues []*float64 `json:"estimatedValues"`
+}
+
+// FetchDay implements provider.Provider.
+func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) ([]provider.Reading, error) {
+	query := url.Values{
+		"meterId": {pointID},
+		"day":     {fmt.Sprintf("%04d-%02d-%02d", day.Year(), day.Month(), day.Day())},
+	}
+	body, err := p.get(ctx, "/orchestration/ConsumptionRecord/Day", query)
+	if err != nil {
+		return nil, err
+	}
+
+	var records []dayRecord
+	if err := json.Unmarshal(body, &records); err != nil {
+		return nil, fmt.Errorf("evn: decoding day records for point %s: %w", pointID, err)
+	}
+
+	var total *dayRecord
+	for i := range records {
+		if records[i].ECID == nil {
+			total = &records[i]
+			break
+		}
+	}
+	if total == nil {
+		return nil, fmt.Errorf("evn: no total (ec_id: null) record in day response for point %s", pointID)
+	}
+
+	midnight := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, viennaLocation)
+	readings := make([]provider.Reading, 0, len(total.MeteredValues))
+	for i, metered := range total.MeteredValues {
+		value := metered
+		if value == nil && i < len(total.EstimatedValues) {
+			value = total.EstimatedValues[i]
+		}
+		if value == nil {
+			continue
+		}
+		readings = append(readings, provider.Reading{
+			Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
+			ValueWh:   *value * 1000,
+		})
+	}
+	return readings, nil
 }
