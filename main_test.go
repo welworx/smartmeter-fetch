@@ -112,14 +112,82 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
-func TestRun_Fetch_MissingPoint(t *testing.T) {
+func TestRun_Fetch_NoPointFetchesEveryPointOfDirectLogin(t *testing.T) {
+	want := []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), ValueWh: 1000}}
+	withStubProvider(t, &stubProvider{
+		points:   []provider.Point{{ID: "AT001"}, {ID: "AT002"}},
+		readings: want,
+	})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fetch", "-day", "2024-01-15", "-user", "u", "-password", "p"}, &stdout, &stderr)
-	if code != 2 {
-		t.Errorf("run(fetch, no -point) = %d, want 2", code)
+	code := run([]string{"fetch", "-day", "2024-01-15"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, no -point) = %d, stderr = %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "-point is required") {
-		t.Errorf("stderr = %q, want missing -point message", stderr.String())
+
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("results = %+v, want 2 (one per point)", got)
+	}
+	for i, id := range []string{"AT001", "AT002"} {
+		if got[i].Point != id || got[i].Profile != "" || len(got[i].Readings) != 1 {
+			t.Errorf("results[%d] = %+v, want point %q with 1 reading", i, got[i], id)
+		}
+	}
+}
+
+func TestRun_Fetch_NoPointNoProfileFetchesEveryProfile(t *testing.T) {
+	isolateConfigDir(t)
+	t.Setenv("SMARTMETER_PASSPHRASE", "pp")
+	withStubProvider(t, &stubProvider{points: []provider.Point{{ID: "AT001"}}})
+	var addOut, addErr bytes.Buffer
+	t.Setenv("SMARTMETER_USER", "alice")
+	t.Setenv("SMARTMETER_PASSWORD", "pw1")
+	runProfile([]string{"add", "main"}, &addOut, &addErr)
+	t.Setenv("SMARTMETER_USER", "bob")
+	t.Setenv("SMARTMETER_PASSWORD", "pw2")
+	runProfile([]string{"add", "second"}, &addOut, &addErr)
+	t.Setenv("SMARTMETER_USER", "")
+	t.Setenv("SMARTMETER_PASSWORD", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-day", "2024-01-15"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, no -point/-profile) = %d, stderr = %s", code, stderr.String())
+	}
+
+	var got []fetchResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding stdout: %v (stdout = %s)", err, stdout.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("results = %+v, want 2 (one point per profile)", got)
+	}
+	profiles := map[string]bool{got[0].Profile: true, got[1].Profile: true}
+	if !profiles["main"] || !profiles["second"] {
+		t.Errorf("results = %+v, want profiles \"main\" and \"second\"", got)
+	}
+}
+
+func TestRun_Fetch_DayDefaultsToYesterday(t *testing.T) {
+	want := []provider.Reading{{Timestamp: time.Now(), ValueWh: 1000}}
+	withStubProvider(t, &stubProvider{readings: want})
+	t.Setenv("SMARTMETER_USER", "u")
+	t.Setenv("SMARTMETER_PASSWORD", "p")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fetch", "-point", "AT001"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(fetch, no -day) = %d, stderr = %s", code, stderr.String())
+	}
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	if !strings.Contains(stderr.String(), "day="+yesterday) {
+		t.Errorf("stderr = %q, want day=%s (yesterday)", stderr.String(), yesterday)
 	}
 }
 

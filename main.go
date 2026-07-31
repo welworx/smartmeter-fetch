@@ -30,7 +30,8 @@ Usage:
 
 Commands:
   list-points   List metering points visible to the account
-  fetch         Fetch one day's readings for a metering point
+  fetch         Fetch one day's readings (default: yesterday, every point of
+                every configured profile)
   profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
   version       Print version and exit
   help          Print this message
@@ -55,6 +56,10 @@ Examples:
   # Or store credentials once, encrypted under a master passphrase
   smartmeter-fetch profile add home
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15
+
+  # No -point/-day/-profile: fetch yesterday for every point of every
+  # stored profile
+  smartmeter-fetch fetch
 
   # Fetch one day's readings, with verbose logging (auth events + request URLs)
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -v
@@ -169,52 +174,78 @@ func (c *providerFlags) newProvider(logger *slog.Logger) (provider.Provider, err
 	if err != nil {
 		return nil, err
 	}
+	return newProviderFor(providerName, user, password, c.userAgent, logger)
+}
+
+func newProviderFor(providerName, user, password, userAgent string, logger *slog.Logger) (provider.Provider, error) {
 	factory, ok := providerFactories[providerName]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider %q (only \"evn\" is supported)", providerName)
 	}
-	return factory(user, password, c.userAgent, logger), nil
+	return factory(user, password, userAgent, logger), nil
 }
 
-// resolveCredentials returns the portal username/password/provider to use.
-// -user/-password (which already default from $SMARTMETER_USER/
-// $SMARTMETER_PASSWORD, see register) take priority, in which case -provider
-// picks the provider as usual. Otherwise a profile is loaded from
-// credentials.enc, selected by -profile or, if that's empty, the first
-// configured profile — and the profile's own stored provider is used
-// instead of -provider, since a profile is a specific portal login.
+// resolvedProfile is one portal login resolved from either -user/-password
+// or a stored profile, ready to build a provider from.
+type resolvedProfile struct {
+	label                        string // profile name, or "" for -user/-password
+	user, password, providerName string
+}
+
+// resolveCredentials returns the portal username/password/provider to use
+// for a single explicit -point fetch: -profile if set, else the first
+// configured profile.
 func (c *providerFlags) resolveCredentials() (user, password, providerName string, err error) {
+	profiles, err := c.resolveProfiles()
+	if err != nil {
+		return "", "", "", err
+	}
+	first := profiles[0]
+	return first.user, first.password, first.providerName, nil
+}
+
+// resolveProfiles returns every portal login -point-less fetch should run
+// against. -user/-password (which already default from $SMARTMETER_USER/
+// $SMARTMETER_PASSWORD, see register) take priority and yield a single
+// unnamed login using -provider. Otherwise profiles are loaded from
+// credentials.enc: -profile picks one by name, or if that's empty every
+// configured profile is returned — a profile's own stored provider is used
+// instead of -provider, since a profile is a specific portal login.
+func (c *providerFlags) resolveProfiles() ([]resolvedProfile, error) {
 	if c.user != "" && c.password != "" {
-		return c.user, c.password, c.name, nil
+		return []resolvedProfile{{"", c.user, c.password, c.name}}, nil
 	}
 	dir, err := config.Dir()
 	if err != nil {
-		return "", "", "", err
+		return nil, err
 	}
 	if !config.CredentialsExist(dir) {
-		return "", "", "", errors.New("missing credentials: pass -user/-password, set SMARTMETER_USER/SMARTMETER_PASSWORD, or add a profile (smartmeter-fetch profile add <name>)")
+		return nil, errors.New("missing credentials: pass -user/-password, set SMARTMETER_USER/SMARTMETER_PASSWORD, or add a profile (smartmeter-fetch profile add <name>)")
 	}
 	pass, err := readPassphrase(false)
 	if err != nil {
-		return "", "", "", err
+		return nil, err
 	}
 	profiles, err := config.LoadSecrets(dir, pass)
 	if err != nil {
-		return "", "", "", err
+		return nil, err
 	}
 	if len(profiles) == 0 {
-		return "", "", "", errors.New("no profiles configured (run: smartmeter-fetch profile add <name>)")
+		return nil, errors.New("no profiles configured (run: smartmeter-fetch profile add <name>)")
 	}
 	if c.profile != "" {
 		for _, p := range profiles {
 			if p.Name == c.profile {
-				return p.Username, p.Password, providerOrDefault(p.Provider), nil
+				return []resolvedProfile{{p.Name, p.Username, p.Password, providerOrDefault(p.Provider)}}, nil
 			}
 		}
-		return "", "", "", fmt.Errorf("no profile %q (run: smartmeter-fetch profile add %s)", c.profile, c.profile)
+		return nil, fmt.Errorf("no profile %q (run: smartmeter-fetch profile add %s)", c.profile, c.profile)
 	}
-	first := profiles[0]
-	return first.Username, first.Password, providerOrDefault(first.Provider), nil
+	out := make([]resolvedProfile, len(profiles))
+	for i, p := range profiles {
+		out[i] = resolvedProfile{p.Name, p.Username, p.Password, providerOrDefault(p.Provider)}
+	}
+	return out, nil
 }
 
 // providerOrDefault fills in defaultProviderName for a profile saved before
@@ -277,8 +308,8 @@ func runListPoints(args []string, stdout, stderr io.Writer) int {
 // the common providerFlags). A standalone function so printUsage can list
 // these without also pulling in the common ones a second time.
 func registerFetchOnlyFlags(fs *flag.FlagSet) (point, day *string) {
-	point = fs.String("point", "", "metering point ID (required, see list-points)")
-	day = fs.String("day", "", "date to fetch, YYYY-MM-DD (required)")
+	point = fs.String("point", "", "metering point ID (default: every point of -profile, or of every configured profile if -profile is also omitted; see list-points)")
+	day = fs.String("day", "", "date to fetch, YYYY-MM-DD (default: yesterday)")
 	return point, day
 }
 
@@ -292,7 +323,7 @@ func newFetchFlagSet(out io.Writer) (fs *flag.FlagSet, c *providerFlags, point, 
 	c.register(fs)
 	point, day = registerFetchOnlyFlags(fs)
 	fs.Usage = func() {
-		fmt.Fprint(out, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch -point <id> -day <YYYY-MM-DD> [flags]\n\nFlags:\n")
+		fmt.Fprint(out, "Fetch one day's readings for a metering point.\n\nUsage:\n  smartmeter-fetch fetch [-point <id>] [-day <YYYY-MM-DD>] [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	return fs, c, point, day
@@ -304,26 +335,30 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		return exitCodeForParseErr(err)
 	}
 
-	if *point == "" {
-		fmt.Fprintln(stderr, "smartmeter-fetch: -point is required")
-		fs.Usage()
-		return 2
+	dayStr := *day
+	if dayStr == "" {
+		dayStr = time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	}
-	parsedDay, err := time.Parse("2006-01-02", *day)
+	parsedDay, err := time.Parse("2006-01-02", dayStr)
 	if err != nil {
-		fmt.Fprintf(stderr, "smartmeter-fetch: -day %q: %v\n", *day, err)
+		fmt.Fprintf(stderr, "smartmeter-fetch: -day %q: %v\n", dayStr, err)
 		fs.Usage()
 		return 2
 	}
 
 	log := newLogger(c.verbose, stderr)
+
+	if *point == "" {
+		return runFetchAll(c, parsedDay, dayStr, log, stdout, stderr)
+	}
+
 	p, err := c.newProvider(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
 		return 2
 	}
 
-	log.Info("fetching day", "provider", p.Name(), "point", *point, "day", *day)
+	log.Info("fetching day", "provider", p.Name(), "point", *point, "day", dayStr)
 	readings, err := p.FetchDay(context.Background(), *point, parsedDay)
 	if err != nil {
 		log.Error("fetching day failed", "error", err)
@@ -332,6 +367,72 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	log.Debug("fetched readings", "count", len(readings))
 
 	return printJSON(stdout, stderr, readings)
+}
+
+// fetchResult is one point's outcome when "fetch" runs without -point,
+// fanning out across every point of one or more profiles.
+type fetchResult struct {
+	Profile   string             `json:"profile,omitempty"`
+	Provider  string             `json:"provider"`
+	Point     string             `json:"point,omitempty"`
+	PointName string             `json:"point_name,omitempty"`
+	Day       string             `json:"day"`
+	Readings  []provider.Reading `json:"readings,omitempty"`
+	Error     string             `json:"error,omitempty"`
+}
+
+// runFetchAll fetches day for every point of every profile resolved by c
+// (see providerFlags.resolveProfiles), continuing past a failed profile or
+// point so one bad login or point doesn't block the rest. Exit code is 1 if
+// any profile/point failed, even though partial results are still printed.
+func runFetchAll(c *providerFlags, day time.Time, dayStr string, log *slog.Logger, stdout, stderr io.Writer) int {
+	profiles, err := c.resolveProfiles()
+	if err != nil {
+		fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+		return 2
+	}
+
+	var results []fetchResult
+	failed := false
+	for _, prof := range profiles {
+		p, err := newProviderFor(prof.providerName, prof.user, prof.password, c.userAgent, log)
+		if err != nil {
+			fmt.Fprintf(stderr, "smartmeter-fetch: %v\n", err)
+			failed = true
+			continue
+		}
+
+		log.Info("listing metering points", "provider", p.Name(), "profile", prof.label)
+		points, err := p.ListPoints(context.Background())
+		if err != nil {
+			log.Error("listing metering points failed", "profile", prof.label, "error", err)
+			results = append(results, fetchResult{Profile: prof.label, Provider: p.Name(), Day: dayStr, Error: err.Error()})
+			failed = true
+			continue
+		}
+
+		for _, pt := range points {
+			log.Info("fetching day", "provider", p.Name(), "profile", prof.label, "point", pt.ID, "day", dayStr)
+			res := fetchResult{Profile: prof.label, Provider: p.Name(), Point: pt.ID, PointName: pt.Name, Day: dayStr}
+			readings, err := p.FetchDay(context.Background(), pt.ID, day)
+			if err != nil {
+				log.Error("fetching day failed", "profile", prof.label, "point", pt.ID, "error", err)
+				res.Error = err.Error()
+				failed = true
+			} else {
+				res.Readings = readings
+			}
+			results = append(results, res)
+		}
+	}
+
+	if code := printJSON(stdout, stderr, results); code != 0 {
+		return code
+	}
+	if failed {
+		return 1
+	}
+	return 0
 }
 
 // exitCodeForParseErr maps a flag.FlagSet.Parse error to a process exit
