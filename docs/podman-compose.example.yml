@@ -1,0 +1,24 @@
+# Example podman-compose config for smartmeter-fetch. Copy to
+# podman-compose.yml, fill in credentials, adjust ./data as needed.
+#
+# Bring up: podman-compose up -d
+#
+# New readings are NOT fetched automatically by this container — add the
+# following to the HOST's crontab (crontab -e) to fetch every 15 minutes:
+#
+#   */15 * * * * podman exec smartmeter-fetch /smartmeter-fetch fetch -since-latest
+
+services:
+  smartmeter-fetch:
+    image: ghcr.io/welworx/smartmeter-fetch:latest
+    container_name: smartmeter-fetch # required: the host crontab targets this name
+    restart: unless-stopped
+    user: "65532:65532" # distroless nonroot UID/GID; chown ./data to match
+    environment:
+      SMARTMETER_USER: you@example.com
+      SMARTMETER_PASSWORD: hunter2
+      SMARTMETER_DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    ports:
+      - "8790:8790"

@@ -32,7 +32,9 @@ via `-out`. Each file `-out` renders is replaced wholesale on every run
 (never appended to), so an export is only ever as complete as the range of
 the run that wrote it — `-data-dir` stays the source of truth. A day
 already present in `-data-dir` is skipped rather than re-fetched, unless
-`-force` is passed. The query API is not yet implemented.
+`-force` is passed. `serve` runs the `/v1` query API (`GET /v1/points`,
+`GET /v1/readings`) against `-data-dir` — see [Container](#container)
+below for running it as a long-lived podman container.
 
 Each reading carries a `quality` code when the portal reports one: `L2`
 (substitute value, final) or `L3` (substitute value, still provisional —
@@ -102,6 +104,38 @@ type Store interface {
 - `GET /v1/readings?point=<id>&since=<RFC3339>` — cursor-based read, so
   consumers can resume from their own last-seen timestamp instead of
   re-fetching everything.
+
+## Container
+
+A multi-arch (`linux/amd64`, `linux/arm64`) image is published to
+`ghcr.io/welworx/smartmeter-fetch` on every release. The container's main
+process is `smartmeter-fetch serve`, listening on `:8790` — it only reads
+`-data-dir`, so it needs no portal credentials. New data is pulled in by
+running `fetch -since-latest` *inside the same running container* on a
+schedule, from the host's crontab:
+
+```bash
+podman run -d \
+  --name smartmeter-fetch \
+  -e SMARTMETER_USER=you@example.com \
+  -e SMARTMETER_PASSWORD=hunter2 \
+  -v ./data:/data \
+  -e SMARTMETER_DATA_DIR=/data \
+  -p 8790:8790 \
+  --user 65532:65532 \
+  ghcr.io/welworx/smartmeter-fetch:latest
+
+# host crontab (crontab -e) — fetch new readings every 15 minutes
+*/15 * * * * podman exec smartmeter-fetch /smartmeter-fetch fetch -since-latest
+```
+
+The image runs as the distroless `nonroot` user (UID/GID `65532`) — the
+mounted data directory needs to be writable by that UID
+(`chown -R 65532:65532 ./data`, or set `--user`/`user:` as shown above).
+
+See [`docs/podman-compose.example.yml`](docs/podman-compose.example.yml)
+for the same setup via `podman-compose`. The API's OpenAPI 3.0 description
+is served at `GET /openapi.json`.
 
 ## Disclaimer
 
