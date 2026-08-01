@@ -14,6 +14,16 @@ archives:
     formats: [binary]
     name_template: "smartmeter-fetch-{{ .Os }}-{{ .Arch }}"
 
+nfpms:
+  - id: smartmeter-fetch
+    package_name: smartmeter-fetch
+    formats: [deb]
+    bindir: /usr/bin
+    maintainer: welworx
+    description: Fetches quarter-hourly smart meter readings from grid operator web portals.
+    homepage: https://github.com/welworx/smartmeter-fetch
+    license: GPL-3.0
+
 checksum:
   name_template: "SHA256SUMS.txt"
   algorithm: sha256
