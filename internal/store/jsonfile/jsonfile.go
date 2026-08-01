@@ -7,6 +7,8 @@ package jsonfile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/welworx/smartmeter-fetch/internal/atomicfile"
 	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/store"
 )
 
 const dayFormat = "2006-01-02"
@@ -30,12 +33,40 @@ func New(dir string) *Store {
 	return &Store{Dir: dir}
 }
 
-func (s *Store) pointDir(providerName, pointID string) string {
-	return filepath.Join(s.Dir, providerName, pointID)
+// pointDir returns the directory for providerName/pointID under Dir. It
+// rejects either name if it isn't safe to use as a single path segment
+// (empty, ".", "..", or containing a path separator), then additionally
+// confirms the cleaned result is still confined under Dir before
+// returning it — providerName and pointID can originate from untrusted
+// input (internal/api resolves an HTTP query parameter to a pointID
+// before calling into this store), so every path built from them must be
+// verified, not merely assumed, to stay under Dir.
+func (s *Store) pointDir(providerName, pointID string) (string, error) {
+	if !validSegment(providerName) {
+		return "", fmt.Errorf("invalid provider name %q", providerName)
+	}
+	if !validSegment(pointID) {
+		return "", fmt.Errorf("invalid point ID %q", pointID)
+	}
+
+	root := filepath.Clean(s.Dir)
+	dir := filepath.Clean(filepath.Join(s.Dir, providerName, pointID))
+	if dir != root && !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
+	}
+	return dir, nil
 }
 
-func (s *Store) dayPath(providerName, pointID string, day time.Time, loc *time.Location) string {
-	return filepath.Join(s.pointDir(providerName, pointID), day.In(loc).Format(dayFormat)+".json")
+func validSegment(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
+}
+
+func (s *Store) dayPath(providerName, pointID string, day time.Time, loc *time.Location) (string, error) {
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, day.In(loc).Format(dayFormat)+".json"), nil
 }
 
 // Put writes readings for one provider/point, grouped and replaced one day
@@ -57,7 +88,10 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		byDay[day] = append(byDay[day], r)
 	}
 
-	dir := s.pointDir(providerName, pointID)
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -69,7 +103,11 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		if err != nil {
 			return err
 		}
-		if err := writeAtomic(s.dayPath(providerName, pointID, dayTime, loc), dayReadings); err != nil {
+		path, err := s.dayPath(providerName, pointID, dayTime, loc)
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(path, dayReadings); err != nil {
 			return err
 		}
 	}
@@ -92,11 +130,38 @@ func writeAtomic(path string, v any) error {
 // single-user tool's data volume; add filename-based pruning if Get ever
 // shows up in a profile.
 func (s *Store) Get(ctx context.Context, providerName, pointID string, since time.Time) ([]provider.Reading, error) {
-	entries, err := os.ReadDir(s.pointDir(providerName, pointID))
+	// Get is the one Store method internal/api calls with an
+	// HTTP-request-derived pointID (see handleReadings), so its reads are
+	// confined by the operating system, not just by the string validation
+	// in validSegment/pointDir: os.OpenRoot pins a directory handle to
+	// s.Dir, and every subsequent open is resolved beneath that handle
+	// (RESOLVE_BENEATH/openat2 where the platform supports it), so no
+	// providerName/pointID — however crafted, and even racing against a
+	// symlink swap — can reach a file outside s.Dir.
+	if !validSegment(providerName) || !validSegment(pointID) {
+		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
+	}
+
+	root, err := os.OpenRoot(s.Dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	pointRoot, err := root.OpenRoot(filepath.Join(providerName, pointID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = pointRoot.Close() }()
+
+	entries, err := fs.ReadDir(pointRoot.FS(), ".")
+	if err != nil {
 		return nil, err
 	}
 
@@ -106,7 +171,7 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 			continue
 		}
 		var dayReadings []provider.Reading
-		data, err := os.ReadFile(filepath.Join(s.pointDir(providerName, pointID), e.Name()))
+		data, err := pointRoot.ReadFile(e.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +193,11 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 // lexicographically the same as chronologically) rather than reading and
 // parsing every file's contents.
 func (s *Store) Latest(ctx context.Context, providerName, pointID string, loc *time.Location) (time.Time, bool, error) {
-	entries, err := os.ReadDir(s.pointDir(providerName, pointID))
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return time.Time{}, false, nil
@@ -159,7 +228,11 @@ func (s *Store) Latest(ctx context.Context, providerName, pointID string, loc *t
 // Has reports whether a day file exists for providerName/pointID/day (day
 // interpreted in loc).
 func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.Time, loc *time.Location) (bool, error) {
-	_, err := os.Stat(s.dayPath(providerName, pointID, day, loc))
+	path, err := s.dayPath(providerName, pointID, day, loc)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
 	if err == nil {
 		return true, nil
 	}
@@ -167,4 +240,41 @@ func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.
 		return false, nil
 	}
 	return false, err
+}
+
+// ListPoints returns every provider/point pair with data currently
+// stored under Dir, discovered from the directory layout itself — no
+// portal call, so this works without credentials.
+func (s *Store) ListPoints(ctx context.Context) ([]store.PointRef, error) {
+	providerEntries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var out []store.PointRef
+	for _, pe := range providerEntries {
+		if !pe.IsDir() {
+			continue
+		}
+		pointEntries, err := os.ReadDir(filepath.Join(s.Dir, pe.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, pointE := range pointEntries {
+			if !pointE.IsDir() {
+				continue
+			}
+			out = append(out, store.PointRef{Provider: pe.Name(), ID: pointE.Name()})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider != out[j].Provider {
+			return out[i].Provider < out[j].Provider
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
 }

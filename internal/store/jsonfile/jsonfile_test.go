@@ -3,10 +3,12 @@ package jsonfile
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/store"
 )
 
 func mustParse(t *testing.T, s string) time.Time {
@@ -233,7 +235,11 @@ func TestPut_AscendingDaysDoNotClobberEachOther(t *testing.T) {
 		t.Errorf("day15Count = %d, want 96", day15Count)
 	}
 
-	entries, err := os.ReadDir(s.pointDir("evn", "AT001"))
+	dir, err := s.pointDir("evn", "AT001")
+	if err != nil {
+		t.Fatalf("pointDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
@@ -295,4 +301,113 @@ func testViennaLocation(t *testing.T) *time.Location {
 		t.Fatalf("time.LoadLocation(Europe/Vienna): %v", err)
 	}
 	return loc
+}
+
+func TestListPoints_EmptyStore(t *testing.T) {
+	s := New(t.TempDir())
+	got, err := s.ListPoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListPoints(empty store) = %+v, want empty", got)
+	}
+}
+
+func TestListPoints_MissingDir(t *testing.T) {
+	s := New(t.TempDir() + "/does-not-exist")
+	got, err := s.ListPoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListPoints(missing dir) = %+v, want empty", got)
+	}
+}
+
+func TestListPoints_MultipleProvidersAndPointsSortedByProviderThenID(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	one := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1}}
+	if err := s.Put(ctx, "evn", "AT002", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Put(ctx, "evn", "AT001", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Put(ctx, "otherprovider", "XY001", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := s.ListPoints(ctx)
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	want := []store.PointRef{
+		{Provider: "evn", ID: "AT001"},
+		{Provider: "evn", ID: "AT002"},
+		{Provider: "otherprovider", ID: "XY001"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListPoints = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListPoints[%d] = %+v, want %+v (want sorted by provider then id)", i, got[i], want[i])
+		}
+	}
+}
+
+// TestRejectsPathTraversalInProviderOrPointID guards against CWE-22: since
+// internal/api resolves an HTTP query parameter into a pointID before
+// calling into this store, providerName/pointID must never be trusted to
+// stay within Dir on their own.
+func TestRejectsPathTraversalInProviderOrPointID(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	reading := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1}}
+
+	badNames := []string{"..", "../etc", "a/../../etc", "a/b", `a\b`, ""}
+	for _, bad := range badNames {
+		if err := s.Put(ctx, bad, "AT001", reading, time.UTC); err == nil {
+			t.Errorf("Put(providerName=%q): want error, got nil", bad)
+		}
+		if err := s.Put(ctx, "evn", bad, reading, time.UTC); err == nil {
+			t.Errorf("Put(pointID=%q): want error, got nil", bad)
+		}
+		if _, err := s.Get(ctx, bad, "AT001", time.Time{}); err == nil {
+			t.Errorf("Get(providerName=%q): want error, got nil", bad)
+		}
+		if _, err := s.Get(ctx, "evn", bad, time.Time{}); err == nil {
+			t.Errorf("Get(pointID=%q): want error, got nil", bad)
+		}
+		if _, _, err := s.Latest(ctx, "evn", bad, time.UTC); err == nil {
+			t.Errorf("Latest(pointID=%q): want error, got nil", bad)
+		}
+		if _, err := s.Has(ctx, "evn", bad, mustParse(t, "2024-01-15T00:00:00Z"), time.UTC); err == nil {
+			t.Errorf("Has(pointID=%q): want error, got nil", bad)
+		}
+	}
+}
+
+// TestGetRefusesToEscapeDirViaSymlink covers what name validation alone
+// cannot: a point directory that is a symlink pointing outside Dir. Get
+// resolves its reads under an os.Root pinned to Dir, so the OS itself
+// refuses to follow the link out.
+func TestGetRefusesToEscapeDirViaSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "2024-01-15.json"), []byte(`[]`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "evn"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "evn", "AT001")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	if _, err := New(dir).Get(context.Background(), "evn", "AT001", time.Time{}); err == nil {
+		t.Error("Get through an escaping symlink: want error, got nil")
+	}
 }

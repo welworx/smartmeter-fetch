@@ -37,6 +37,8 @@ Commands:
                 of every configured profile)
   get           Get readings, fetching first if needed (formats: text/json/csv,
                 aggregation: -sample, export: -out)
+  serve         Serve stored readings over the /v1 HTTP API (GET /v1/points,
+                GET /v1/readings, GET /openapi.json)
   profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
   upgrade       Check for and install a newer release from GitHub
   version       Print version and exit
@@ -54,6 +56,8 @@ Environment variables:
                           e.g. ~/Library/Application Support/smartmeter-fetch on macOS)
   SMARTMETER_DATA_DIR     Directory fetch persists readings under (default: ./data).
                           Same as -data-dir; -data-dir wins if both are set.
+  SMARTMETER_ADDR         Address "serve" listens on. Same as -addr; -addr wins
+                          if both are set. (default: ":8790")
 
 Examples:
   # Credentials via env vars (recommended: keeps them out of shell history)
@@ -103,6 +107,11 @@ Examples:
   # without real Zählpunkt IDs in the file paths
   smartmeter-fetch get -sample day -out "data/<profile>/<zaehlerpunkt_id>/<yyyy>.csv"
 
+  # Serve stored readings over HTTP for other tools to read (e.g.
+  # hass-smartmeter); pair with a cron/systemd timer running
+  # "fetch -since-latest" to keep -data-dir current
+  smartmeter-fetch serve
+
   # Override the User-Agent sent to the portal
   smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
 
@@ -144,6 +153,12 @@ func printUsage(w io.Writer) {
 	registerGetFlags(getOnlyFS)
 	getOnlyFS.PrintDefaults()
 
+	fmt.Fprint(w, "\nserve-only flags:\n")
+	serveOnlyFS := flag.NewFlagSet("serve-only", flag.ContinueOnError)
+	serveOnlyFS.SetOutput(w)
+	registerServeFlags(serveOnlyFS)
+	serveOnlyFS.PrintDefaults()
+
 	fmt.Fprint(w, "\n")
 	printProfileUsage(w)
 
@@ -174,6 +189,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runFetch(rest, stdout, stderr)
 	case "get":
 		return runGet(rest, stdout, stderr)
+	case "serve":
+		return runServe(rest, stdout, stderr)
 	case "profile":
 		return runProfile(rest, stdout, stderr)
 	case "upgrade":

@@ -1,0 +1,34 @@
+# Example podman-compose config for smartmeter-fetch. Copy to
+# podman-compose.yml, fill in credentials, adjust ./data as needed.
+#
+# Bring up: podman-compose up -d
+#
+# New readings are NOT fetched automatically by this container — add the
+# following to the HOST's crontab (crontab -e) to fetch every 15 minutes:
+#
+#   */15 * * * * podman exec smartmeter-fetch /smartmeter-fetch fetch -since-latest
+
+services:
+  smartmeter-fetch:
+    image: ghcr.io/welworx/smartmeter-fetch:latest
+    container_name: smartmeter-fetch # required: the host crontab targets this name
+    restart: unless-stopped
+    user: "65532:65532" # distroless nonroot UID/GID
+    environment:
+      SMARTMETER_USER: you@example.com
+      SMARTMETER_PASSWORD: hunter2
+      SMARTMETER_DATA_DIR: /data
+    volumes:
+      # :U makes podman chown ./data to whatever host UID/GID the container's
+      # 65532 maps to — needed under rootless podman, where it is NOT host UID
+      # 65532. A plain `chown -R 65532:65532 ./data` only works rootful.
+      #
+      # SELinux hosts (Fedora/RHEL/CoreOS) also need a relabel: use `:Z`
+      # (private) or `:z` (shared). podman-compose mishandles the combined
+      # `:U,Z` form (containers/podman-compose#412), so on SELinux use `:Z`
+      # alone here and do the ownership fix once, up front, with:
+      #
+      #   podman unshare chown -R 65532:65532 ./data
+      - ./data:/data:U
+    ports:
+      - "8790:8790"

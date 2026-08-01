@@ -21,10 +21,18 @@ of Home Assistant and should stay that way.
   first: `data/<provider>/<point>/<date>.json`, atomic write via temp file +
   rename). Additional backends (Postgres, MariaDB, SQLite) are deliberately
   not built until a real need shows up — see `README.md#status`.
-- `internal/api/` — the versioned (`/v1`) HTTP query API. This is the
-  cross-repo contract with hass-smartmeter: `GET /v1/points` and
-  `GET /v1/readings?point=<id>&since=<RFC3339>`. Treat changes here as a
+- `internal/api/` — the versioned (`/v1`) HTTP query API, served by the
+  `serve` command (`serve.go`). This is the cross-repo contract with
+  hass-smartmeter: `GET /v1/points` and
+  `GET /v1/readings?point=<id>&since=<RFC3339>` (spec: `GET /openapi.json`
+  or `internal/api/openapi.json`). Treat changes here as a
   breaking-change surface, not an internal implementation detail.
+- `Containerfile` — copies the binary goreleaser cross-compiles into a
+  distroless image; `serve` is the container's entrypoint. New data is
+  pulled in via `podman exec <container> /smartmeter-fetch fetch
+  -since-latest` on a host cron schedule, not an in-container cron daemon
+  (the leading `/` is required — distroless has no `/` on `PATH`)
+  — see `README.md#container`.
 - `internal/config/` — the encrypted credential profile store
   (`credentials.enc`: argon2id-derived-key AES-256-GCM, atomic write). A
   `Profile` is `{Name, Provider, Username, Password}`; driven by the CLI's
