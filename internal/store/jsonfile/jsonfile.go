@@ -144,7 +144,7 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir) // codeql[go/path-injection] -- dir is confined under s.Dir: providerName/pointID are rejected above unless non-empty, not "."/"..", and free of path separators, and the joined+cleaned path is confirmed to still have s.Dir as a prefix
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -158,7 +158,7 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 			continue
 		}
 		var dayReadings []provider.Reading
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, e.Name())) // codeql[go/path-injection] -- dir is already confined under s.Dir (see above); e.Name() is a filename returned by os.ReadDir of that confined dir, never external input
 		if err != nil {
 			return nil, err
 		}
