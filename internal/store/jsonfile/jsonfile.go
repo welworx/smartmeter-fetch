@@ -129,10 +129,21 @@ func writeAtomic(path string, v any) error {
 // single-user tool's data volume; add filename-based pruning if Get ever
 // shows up in a profile.
 func (s *Store) Get(ctx context.Context, providerName, pointID string, since time.Time) ([]provider.Reading, error) {
-	dir, err := s.pointDir(providerName, pointID)
-	if err != nil {
-		return nil, err
+	// Validated and confined here, in the same function as the os.ReadDir/
+	// os.ReadFile calls below, rather than only inside pointDir: Get is
+	// the one Store method internal/api calls with an HTTP-request-
+	// derived pointID (see handleReadings), so the confinement check has
+	// to be visibly local to the functions that actually touch the
+	// filesystem with that value.
+	if !validSegment(providerName) || !validSegment(pointID) {
+		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
 	}
+	root := filepath.Clean(s.Dir)
+	dir := filepath.Clean(filepath.Join(s.Dir, providerName, pointID))
+	if dir != root && !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
