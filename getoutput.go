@@ -44,6 +44,14 @@ type pointOutput struct {
 	Readings       []outputRow `json:"readings"`
 }
 
+// formatValue renders a reading's value for text and CSV output. 'f'
+// rather than 'g' so a realistic Wh total (a year's worth easily exceeds
+// six significant digits) never flips to scientific notation; shared by
+// both writers so the two formats can't drift apart.
+func formatValue(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
 // writeText writes an aligned table per point. A point header line is
 // only printed when there's more than one point, so the common
 // single-point case stays a plain table.
@@ -58,7 +66,7 @@ func writeText(w io.Writer, points []pointOutput) error {
 		}
 		fmt.Fprintln(tw, "TIMESTAMP\tVALUE\tUNIT\tQUALITY")
 		for _, r := range p.Readings {
-			fmt.Fprintf(tw, "%s\t%g\t%s\t%s\n", r.Timestamp.Format(time.RFC3339), r.Value, r.Unit, r.Quality)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Timestamp.Format(time.RFC3339), formatValue(r.Value), r.Unit, r.Quality)
 		}
 	}
 	return tw.Flush()
@@ -87,7 +95,7 @@ func writeCSV(w io.Writer, rows []outputRow) error {
 	for _, r := range rows {
 		record := []string{
 			r.Timestamp.Format(time.RFC3339),
-			strconv.FormatFloat(r.Value, 'g', -1, 64),
+			formatValue(r.Value),
 			r.Unit,
 			r.Quality,
 		}

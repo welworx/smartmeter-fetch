@@ -22,6 +22,24 @@ func TestToOutputRows_AddsUnit(t *testing.T) {
 	}
 }
 
+// A year's Wh total exceeds six significant digits, where %g / 'g' would
+// switch to scientific notation in both text and CSV output.
+func TestWriteTextAndCSV_LargeValuesNotScientific(t *testing.T) {
+	rows := []outputRow{{Timestamp: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC), Value: 4321987.5, Unit: "Wh"}}
+	var text, csv bytes.Buffer
+	if err := writeText(&text, []pointOutput{{Point: "AT001", Readings: rows}}); err != nil {
+		t.Fatalf("writeText: %v", err)
+	}
+	if err := writeCSV(&csv, rows); err != nil {
+		t.Fatalf("writeCSV: %v", err)
+	}
+	for name, out := range map[string]string{"text": text.String(), "csv": csv.String()} {
+		if !strings.Contains(out, "4321987.5") {
+			t.Errorf("%s output = %q, want the plain decimal value", name, out)
+		}
+	}
+}
+
 func TestWriteText_SinglePointNoHeader(t *testing.T) {
 	points := []pointOutput{{Point: "AT001", Readings: []outputRow{
 		{Timestamp: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC), Value: 42, Unit: "Wh"},
