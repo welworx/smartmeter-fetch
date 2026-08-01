@@ -609,15 +609,23 @@ func TestRun_Fetch_SinceLatestFallsBackToYesterdayWhenNothingStored(t *testing.T
 // seedYesterday stores one reading for "yesterday" so -since-latest's
 // resolved range (latest..yesterday) is exactly that single day — keeping
 // these tests independent of how many days have passed since a fixed date.
+//
+// The returned day string must be computed in the same location Put
+// buckets by (the provider's own, here Vienna), not the system/UTC
+// location yesterday() itself uses: for roughly two hours every night
+// (22:00-24:00 UTC in CEST season) those two disagree by a calendar day,
+// and formatting in the wrong one made this helper's caller assert
+// against a day the reading was never actually stored under.
 func seedYesterday(t *testing.T, dataDir string, value float64) string {
 	t.Helper()
+	loc := (&stubProvider{}).Location()
 	day := yesterday()
 	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
 		{Timestamp: day, Value: value},
-	}, (&stubProvider{}).Location()); err != nil {
+	}, loc); err != nil {
 		t.Fatalf("seeding store: %v", err)
 	}
-	return day.Format(dayLayout)
+	return day.In(loc).Format(dayLayout)
 }
 
 func TestRun_Fetch_SinceLatestSkipsAlreadyStoredBoundaryDayByDefault(t *testing.T) {
