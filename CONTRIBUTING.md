@@ -7,10 +7,12 @@ disclaimer](README.md#disclaimer)), but fixes and improvements are welcome.
 
 1. Tests pass: `go test -race ./...`
 2. Code is formatted: `gofmt -l .` is empty
-3. Linter passes: `golangci-lint run`
+3. `go vet ./...` is clean
+4. Linter passes: `golangci-lint run`
 
-`.pre-commit-config.yaml` runs all three on commit if you want them enforced
-automatically (`pip install pre-commit && pre-commit install`).
+`.pre-commit-config.yaml` runs all of the above plus a secret scan
+(gitleaks) on commit if you want them enforced automatically
+(`pip install pre-commit && pre-commit install`).
 
 ## Scope
 
