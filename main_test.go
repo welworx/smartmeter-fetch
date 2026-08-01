@@ -31,6 +31,14 @@ func (s *stubProvider) FetchDay(ctx context.Context, pointID string, day time.Ti
 	return s.readings, s.err
 }
 
+func (s *stubProvider) Location() *time.Location {
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		panic(err)
+	}
+	return loc
+}
+
 func withStubProvider(t *testing.T, stub *stubProvider) {
 	t.Helper()
 	orig := providerFactories["evn"]

@@ -290,3 +290,6 @@ func (p *Provider) FetchDay(ctx context.Context, pointID string, day time.Time) 
 	}
 	return readings, nil
 }
+
+// Location implements provider.Provider.
+func (p *Provider) Location() *time.Location { return viennaLocation }

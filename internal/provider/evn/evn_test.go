@@ -21,6 +21,22 @@ func TestProvider_Name(t *testing.T) {
 	}
 }
 
+func TestProvider_Location(t *testing.T) {
+	p := New("user", "pass")
+	loc := p.Location()
+	if loc == nil {
+		t.Fatal("Location() = nil")
+	}
+	// Vienna is UTC+1 in January (no DST) — a location-sensitive way to
+	// confirm this is really Europe/Vienna and not e.g. UTC or a
+	// mislabeled fixed offset.
+	got := time.Date(2024, time.January, 15, 12, 0, 0, 0, loc)
+	want := time.Date(2024, time.January, 15, 11, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("Location() offset wrong: 2024-01-15T12:00 in Location() = %v, want %v (UTC+1)", got, want)
+	}
+}
+
 func TestProvider_Login_Success(t *testing.T) {
 	var gotBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
