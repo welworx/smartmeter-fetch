@@ -38,6 +38,7 @@ Commands:
   get           Get readings, fetching first if needed (formats: text/json/csv,
                 aggregation: -sample, export: -out)
   profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
+  upgrade       Check for and install a newer release from GitHub
   version       Print version and exit
   help          Print this message
 `
@@ -107,6 +108,12 @@ Examples:
 
   # Recheck stored credentials are still accepted by the portal
   smartmeter-fetch profile verify
+
+  # Check for a newer release without installing it
+  smartmeter-fetch upgrade -check
+
+  # Download, verify, and install the latest release, no confirmation prompt
+  smartmeter-fetch upgrade -y
 `
 
 // printUsage writes the full help text: commands, every flag with its
@@ -169,6 +176,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGet(rest, stdout, stderr)
 	case "profile":
 		return runProfile(rest, stdout, stderr)
+	case "upgrade":
+		return runUpgrade(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "smartmeter-fetch: unknown command %q\n\n", cmd)
 		printUsage(stderr)

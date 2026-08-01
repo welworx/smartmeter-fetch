@@ -23,7 +23,7 @@ stores, it doesn't know or care about Home Assistant.
 ## Status
 
 The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
-(`list-points`, `fetch`, `get`, `profile`) are implemented. `fetch`
+(`list-points`, `fetch`, `get`, `profile`, `upgrade`) are implemented. `fetch`
 persists readings to `-data-dir` without printing them by default (pass
 `-json` for that). `get` ensures a date range is fetched, then reads it
 back — as a table, JSON, or CSV, optionally aggregated (`-sample
