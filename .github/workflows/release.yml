@@ -8,22 +8,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Build matrix
-        run: |
-          mkdir dist
-          for os in darwin linux windows; do
-            for arch in amd64 arm64; do
-              ext=""; [ "$os" = "windows" ] && ext=".exe"
-              GOOS=$os GOARCH=$arch go build \
-                -ldflags "-X main.version=${GITHUB_REF_NAME}" \
-                -o "dist/smartmeter-fetch-${os}-${arch}${ext}"
-            done
-          done
-          (cd dist && sha256sum * > SHA256SUMS.txt)
-      - uses: softprops/action-gh-release@v3
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
-          files: dist/*
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
