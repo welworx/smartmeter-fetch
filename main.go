@@ -504,13 +504,13 @@ func parseFetchPlan(f *fetchFlags) (fetchPlan, error) {
 // one provider/point. Only "since-latest" needs st and providerName/pointID
 // — it looks up the point's last stored day (see CLAUDE.md: never assume
 // "yesterday" is complete, always resume from the last consumed point).
-func (p fetchPlan) days(ctx context.Context, st store.Store, providerName, pointID string) ([]time.Time, error) {
+func (p fetchPlan) days(ctx context.Context, st store.Store, providerName, pointID string, loc *time.Location) ([]time.Time, error) {
 	switch p.mode {
 	case "range":
 		return dayRange(p.from, p.to), nil
 	case "since-latest":
 		y := yesterday()
-		latest, found, err := st.Latest(ctx, providerName, pointID)
+		latest, found, err := st.Latest(ctx, providerName, pointID, loc)
 		if err != nil {
 			return nil, err
 		}
@@ -605,7 +605,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 	res := fetchResult{Profile: profileLabel, Provider: p.Name(), Point: pointID, PointName: pointName, Day: dayStr, Unit: provider.Unit}
 
 	if !force {
-		has, err := st.Has(ctx, p.Name(), pointID, day)
+		has, err := st.Has(ctx, p.Name(), pointID, day, p.Location())
 		if err != nil {
 			log.Error("checking stored data failed", "profile", profileLabel, "point", pointID, "day", dayStr, "error", err)
 			res.Error = err.Error()
@@ -629,7 +629,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 	res.Readings = readings
 	log.Debug("fetched readings", "profile", profileLabel, "point", pointID, "count", len(readings))
 
-	if err := st.Put(ctx, p.Name(), pointID, readings); err != nil {
+	if err := st.Put(ctx, p.Name(), pointID, readings, p.Location()); err != nil {
 		log.Error("storing readings failed", "profile", profileLabel, "point", pointID, "day", dayStr, "error", err)
 		res.Error = err.Error()
 		return res
@@ -641,7 +641,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 // fetchPointDays resolves plan into concrete days for one provider/point
 // and fetches (and persists) each in order.
 func fetchPointDays(ctx context.Context, p provider.Provider, st store.Store, plan fetchPlan, force bool, profileLabel, pointID, pointName string, log *slog.Logger) ([]fetchResult, error) {
-	days, err := plan.days(ctx, st, p.Name(), pointID)
+	days, err := plan.days(ctx, st, p.Name(), pointID, p.Location())
 	if err != nil {
 		return nil, fmt.Errorf("resolving days to fetch for %s: %w", pointID, err)
 	}
