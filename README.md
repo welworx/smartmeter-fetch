@@ -28,9 +28,11 @@ persists readings to `-data-dir` without printing them by default (pass
 `-json` for that). `get` ensures a date range is fetched, then reads it
 back — as a table, JSON, or CSV, optionally aggregated (`-sample
 hour|day|week|month|quarter`) and optionally exported to templated file(s)
-via `-out`. A day already present in `-data-dir` is skipped rather than
-re-fetched, unless `-force` is passed. The query API is not yet
-implemented.
+via `-out`. Each file `-out` renders is replaced wholesale on every run
+(never appended to), so an export is only ever as complete as the range of
+the run that wrote it — `-data-dir` stays the source of truth. A day
+already present in `-data-dir` is skipped rather than re-fetched, unless
+`-force` is passed. The query API is not yet implemented.
 
 Each reading carries a `quality` code when the portal reports one: `L2`
 (substitute value, final) or `L3` (substitute value, still provisional —
