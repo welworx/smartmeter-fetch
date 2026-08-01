@@ -20,6 +20,20 @@ stores, it doesn't know or care about Home Assistant.
 > permitted under that portal's Terms of Service — check those before using
 > it. Use is entirely at your own risk; see [Disclaimer](#disclaimer) below.
 
+## Install
+
+Each [release](https://github.com/welworx/smartmeter-fetch/releases) ships a
+`.deb` package alongside plain binaries. On a Debian/Ubuntu server:
+
+```bash
+curl -LO https://github.com/welworx/smartmeter-fetch/releases/latest/download/smartmeter-fetch_<version>_linux_amd64.deb
+sudo apt install ./smartmeter-fetch_<version>_linux_amd64.deb
+```
+
+(use `arm64` instead of `amd64` on ARM hosts). No apt repository is hosted —
+this installs the downloaded file directly and won't auto-update; re-run the
+above with a new version to upgrade.
+
 ## Status
 
 The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
