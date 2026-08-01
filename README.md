@@ -65,6 +65,24 @@ Credentials can also be stored once, encrypted under a master passphrase
 before saving, and recheckable later with `smartmeter-fetch profile verify`.
 See `smartmeter-fetch help` for the full `profile` command reference.
 
+`smartmeter-fetch upgrade` checks GitHub for a newer release and can
+download, verify, and install it in place:
+
+```bash
+smartmeter-fetch upgrade -check   # check only, don't install
+smartmeter-fetch upgrade -y       # install the latest release, no confirmation prompt
+```
+
+### Environment variables
+
+| Variable                | Purpose                                                          |
+| ------------------------ | ---------------------------------------------------------------- |
+| `SMARTMETER_USER`        | Portal username. Same as `-user`; `-user` wins if both are set.  |
+| `SMARTMETER_PASSWORD`    | Portal password. Same as `-password`; `-password` wins if both are set. |
+| `SMARTMETER_PASSPHRASE`  | `credentials.enc` master passphrase, skips the interactive prompt (used by `profile` commands and, as a fallback, by `list-points`/`fetch`/`get` when reading a stored `-profile`). |
+| `SMARTMETER_CONFIG_DIR`  | Directory holding `credentials.enc` (default: OS config dir, e.g. `~/Library/Application Support/smartmeter-fetch` on macOS). |
+| `SMARTMETER_DATA_DIR`    | Directory `fetch`/`get` persist readings under (default: `./data`). Same as `-data-dir`; `-data-dir` wins if both are set. |
+
 ## Architecture
 
 Two small interfaces are the whole design:
