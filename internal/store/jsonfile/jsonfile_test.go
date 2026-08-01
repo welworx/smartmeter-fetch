@@ -3,6 +3,7 @@ package jsonfile
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -386,5 +387,27 @@ func TestRejectsPathTraversalInProviderOrPointID(t *testing.T) {
 		if _, err := s.Has(ctx, "evn", bad, mustParse(t, "2024-01-15T00:00:00Z"), time.UTC); err == nil {
 			t.Errorf("Has(pointID=%q): want error, got nil", bad)
 		}
+	}
+}
+
+// TestGetRefusesToEscapeDirViaSymlink covers what name validation alone
+// cannot: a point directory that is a symlink pointing outside Dir. Get
+// resolves its reads under an os.Root pinned to Dir, so the OS itself
+// refuses to follow the link out.
+func TestGetRefusesToEscapeDirViaSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "2024-01-15.json"), []byte(`[]`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "evn"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "evn", "AT001")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	if _, err := New(dir).Get(context.Background(), "evn", "AT001", time.Time{}); err == nil {
+		t.Error("Get through an escaping symlink: want error, got nil")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,26 +130,38 @@ func writeAtomic(path string, v any) error {
 // single-user tool's data volume; add filename-based pruning if Get ever
 // shows up in a profile.
 func (s *Store) Get(ctx context.Context, providerName, pointID string, since time.Time) ([]provider.Reading, error) {
-	// Validated and confined here, in the same function as the os.ReadDir/
-	// os.ReadFile calls below, rather than only inside pointDir: Get is
-	// the one Store method internal/api calls with an HTTP-request-
-	// derived pointID (see handleReadings), so the confinement check has
-	// to be visibly local to the functions that actually touch the
-	// filesystem with that value.
+	// Get is the one Store method internal/api calls with an
+	// HTTP-request-derived pointID (see handleReadings), so its reads are
+	// confined by the operating system, not just by the string validation
+	// in validSegment/pointDir: os.OpenRoot pins a directory handle to
+	// s.Dir, and every subsequent open is resolved beneath that handle
+	// (RESOLVE_BENEATH/openat2 where the platform supports it), so no
+	// providerName/pointID — however crafted, and even racing against a
+	// symlink swap — can reach a file outside s.Dir.
 	if !validSegment(providerName) || !validSegment(pointID) {
 		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
 	}
-	root := filepath.Clean(s.Dir)
-	dir := filepath.Clean(filepath.Join(s.Dir, providerName, pointID))
-	if dir != root && !strings.HasPrefix(dir, root+string(filepath.Separator)) {
-		return nil, fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
-	}
 
-	entries, err := os.ReadDir(dir) // codeql[go/path-injection] -- dir is confined under s.Dir: providerName/pointID are rejected above unless non-empty, not "."/"..", and free of path separators, and the joined+cleaned path is confirmed to still have s.Dir as a prefix
+	root, err := os.OpenRoot(s.Dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
+	pointRoot, err := root.OpenRoot(filepath.Join(providerName, pointID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = pointRoot.Close() }()
+
+	entries, err := fs.ReadDir(pointRoot.FS(), ".")
+	if err != nil {
 		return nil, err
 	}
 
@@ -158,7 +171,7 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 			continue
 		}
 		var dayReadings []provider.Reading
-		data, err := os.ReadFile(filepath.Join(dir, e.Name())) // codeql[go/path-injection] -- dir is already confined under s.Dir (see above); e.Name() is a filename returned by os.ReadDir of that confined dir, never external input
+		data, err := pointRoot.ReadFile(e.Name())
 		if err != nil {
 			return nil, err
 		}
