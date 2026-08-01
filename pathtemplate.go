@@ -23,8 +23,12 @@ type pathVars struct {
 // renderPath substitutes -out template placeholders using vars and t (the
 // row's bucket timestamp for the date placeholders). <zaehlerpunkt_id> is
 // listed before <zaehlerpunkt> so the longer placeholder is never
-// shadowed by a partial match of the shorter one.
+// shadowed by a partial match of the shorter one. The date placeholders
+// render in Vienna local time, matching the buckets aggregate emits (it
+// returns bucket starts as UTC), so a Vienna-day bucket never lands in a
+// file named for the previous day, month or year.
 func renderPath(tmpl string, vars pathVars, t time.Time) string {
+	t = t.In(viennaLocation)
 	r := strings.NewReplacer(
 		"<zaehlerpunkt_id>", strconv.Itoa(vars.ZaehlerpunktID),
 		"<zaehlerpunkt>", vars.Zaehlerpunkt,

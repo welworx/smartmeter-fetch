@@ -29,10 +29,12 @@ func TestRenderPath_ZaehlerpunktIDDoesNotCollideWithZaehlerpunkt(t *testing.T) {
 	}
 }
 
+// The year boundary is the Vienna one, not the UTC one: 2023-12-31T23:00Z
+// is already 2024-01-01 00:00 in Vienna, so it belongs in the 2024 file.
 func TestGroupRowsByPath_YearOnlyTemplateSplitsPerYear(t *testing.T) {
 	rows := []outputRow{
-		{Timestamp: time.Date(2023, 12, 31, 23, 0, 0, 0, time.UTC), Value: 1},
-		{Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Value: 2},
+		{Timestamp: time.Date(2023, 12, 31, 22, 0, 0, 0, time.UTC), Value: 1},
+		{Timestamp: time.Date(2023, 12, 31, 23, 0, 0, 0, time.UTC), Value: 2},
 	}
 	groups := groupRowsByPath("<yyyy>/data.csv", pathVars{}, rows)
 	if len(groups) != 2 {
