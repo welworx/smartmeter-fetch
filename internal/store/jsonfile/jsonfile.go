@@ -34,10 +34,12 @@ func New(dir string) *Store {
 
 // pointDir returns the directory for providerName/pointID under Dir. It
 // rejects either name if it isn't safe to use as a single path segment
-// (empty, ".", "..", or containing a path separator) — providerName and
-// pointID can originate from untrusted input (internal/api resolves an
-// HTTP query parameter to a pointID before calling into this store), so
-// every path built from them must be confined under Dir.
+// (empty, ".", "..", or containing a path separator), then additionally
+// confirms the cleaned result is still confined under Dir before
+// returning it — providerName and pointID can originate from untrusted
+// input (internal/api resolves an HTTP query parameter to a pointID
+// before calling into this store), so every path built from them must be
+// verified, not merely assumed, to stay under Dir.
 func (s *Store) pointDir(providerName, pointID string) (string, error) {
 	if !validSegment(providerName) {
 		return "", fmt.Errorf("invalid provider name %q", providerName)
@@ -45,7 +47,13 @@ func (s *Store) pointDir(providerName, pointID string) (string, error) {
 	if !validSegment(pointID) {
 		return "", fmt.Errorf("invalid point ID %q", pointID)
 	}
-	return filepath.Join(s.Dir, providerName, pointID), nil
+
+	root := filepath.Clean(s.Dir)
+	dir := filepath.Clean(filepath.Join(s.Dir, providerName, pointID))
+	if dir != root && !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid provider/point: %q/%q", providerName, pointID)
+	}
+	return dir, nil
 }
 
 func validSegment(s string) bool {
