@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/welworx/smartmeter-fetch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/welworx/smartmeter-fetch/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/welworx/smartmeter-fetch/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/welworx/smartmeter-fetch/actions/workflows/codeql.yml)
+[![Coverage Status](https://coveralls.io/repos/github/welworx/smartmeter-fetch/badge.svg?branch=main)](https://coveralls.io/github/welworx/smartmeter-fetch?branch=main)
+[![Release](https://img.shields.io/github/v/release/welworx/smartmeter-fetch)](https://github.com/welworx/smartmeter-fetch/releases/latest)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/welworx/smartmeter-fetch)](go.mod)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
@@ -76,6 +78,24 @@ Credentials can also be stored once, encrypted under a master passphrase
 `smartmeter-fetch profile add <name>` — verified live against the portal
 before saving, and recheckable later with `smartmeter-fetch profile verify`.
 See `smartmeter-fetch help` for the full `profile` command reference.
+
+`smartmeter-fetch upgrade` checks GitHub for a newer release and can
+download, verify, and install it in place:
+
+```bash
+smartmeter-fetch upgrade -check   # check only, don't install
+smartmeter-fetch upgrade -y       # install the latest release, no confirmation prompt
+```
+
+### Environment variables
+
+| Variable                | Purpose                                                          |
+| ------------------------ | ---------------------------------------------------------------- |
+| `SMARTMETER_USER`        | Portal username. Same as `-user`; `-user` wins if both are set.  |
+| `SMARTMETER_PASSWORD`    | Portal password. Same as `-password`; `-password` wins if both are set. |
+| `SMARTMETER_PASSPHRASE`  | `credentials.enc` master passphrase, skips the interactive prompt (used by `profile` commands and, as a fallback, by `list-points`/`fetch`/`get` when reading a stored `-profile`). |
+| `SMARTMETER_CONFIG_DIR`  | Directory holding `credentials.enc` (default: OS config dir, e.g. `~/Library/Application Support/smartmeter-fetch` on macOS). |
+| `SMARTMETER_DATA_DIR`    | Directory `fetch`/`get` persist readings under (default: `./data`). Same as `-data-dir`; `-data-dir` wins if both are set. |
 
 ## Architecture
 
