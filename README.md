@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/welworx/smartmeter-fetch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/welworx/smartmeter-fetch/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/welworx/smartmeter-fetch/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/welworx/smartmeter-fetch/actions/workflows/codeql.yml)
+[![Coverage Status](https://coveralls.io/repos/github/welworx/smartmeter-fetch/badge.svg?branch=main)](https://coveralls.io/github/welworx/smartmeter-fetch?branch=main)
+[![Release](https://img.shields.io/github/v/release/welworx/smartmeter-fetch)](https://github.com/welworx/smartmeter-fetch/releases/latest)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/welworx/smartmeter-fetch)](go.mod)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
