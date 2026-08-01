@@ -35,6 +35,8 @@ Commands:
   list-points   List metering points visible to the account
   fetch         Fetch and persist readings (default: yesterday, every point
                 of every configured profile)
+  get           Get readings, fetching first if needed (formats: text/json/csv,
+                aggregation: -sample, export: -out)
   profile       Manage stored portal credentials (add/list/update/verify/remove/passphrase)
   version       Print version and exit
   help          Print this message
@@ -89,6 +91,17 @@ Examples:
   # Debug logging (auth events + request URLs)
   smartmeter-fetch fetch -point AT0020000000000000000000100123456 -day 2024-01-15 -log-level debug
 
+  # Get a day's readings back, printed as a table (fetches first if not
+  # already stored)
+  smartmeter-fetch get -point AT0020000000000000000000100123456 -day 2024-01-15
+
+  # Get a year, aggregated to daily totals, as CSV to stdout
+  smartmeter-fetch get -point AT0020000000000000000000100123456 -from -365 -sample day -format csv
+
+  # Export every point of every profile to one CSV per point per year,
+  # without real Zählpunkt IDs in the file paths
+  smartmeter-fetch get -sample day -out "data/<profile>/<zaehlerpunkt_id>/<yyyy>.csv"
+
   # Override the User-Agent sent to the portal
   smartmeter-fetch fetch -point <id> -day 2024-01-15 -user-agent "my-agent/1.0"
 
@@ -105,7 +118,7 @@ Examples:
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, usageHeader)
 
-	fmt.Fprint(w, "\nCommon flags (list-points, fetch):\n")
+	fmt.Fprint(w, "\nCommon flags (list-points, fetch, get):\n")
 	commonFS := flag.NewFlagSet("common", flag.ContinueOnError)
 	commonFS.SetOutput(w)
 	var c providerFlags
@@ -117,6 +130,12 @@ func printUsage(w io.Writer) {
 	fetchOnlyFS.SetOutput(w)
 	registerFetchOnlyFlags(fetchOnlyFS)
 	fetchOnlyFS.PrintDefaults()
+
+	fmt.Fprint(w, "\nget-only flags:\n")
+	getOnlyFS := flag.NewFlagSet("get-only", flag.ContinueOnError)
+	getOnlyFS.SetOutput(w)
+	registerGetFlags(getOnlyFS)
+	getOnlyFS.PrintDefaults()
 
 	fmt.Fprint(w, "\n")
 	printProfileUsage(w)
@@ -146,6 +165,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runListPoints(rest, stdout, stderr)
 	case "fetch":
 		return runFetch(rest, stdout, stderr)
+	case "get":
+		return runGet(rest, stdout, stderr)
 	case "profile":
 		return runProfile(rest, stdout, stderr)
 	default:
@@ -483,13 +504,13 @@ func parseFetchPlan(f *fetchFlags) (fetchPlan, error) {
 // one provider/point. Only "since-latest" needs st and providerName/pointID
 // — it looks up the point's last stored day (see CLAUDE.md: never assume
 // "yesterday" is complete, always resume from the last consumed point).
-func (p fetchPlan) days(ctx context.Context, st store.Store, providerName, pointID string) ([]time.Time, error) {
+func (p fetchPlan) days(ctx context.Context, st store.Store, providerName, pointID string, loc *time.Location) ([]time.Time, error) {
 	switch p.mode {
 	case "range":
 		return dayRange(p.from, p.to), nil
 	case "since-latest":
 		y := yesterday()
-		latest, found, err := st.Latest(ctx, providerName, pointID)
+		latest, found, err := st.Latest(ctx, providerName, pointID, loc)
 		if err != nil {
 			return nil, err
 		}
@@ -584,7 +605,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 	res := fetchResult{Profile: profileLabel, Provider: p.Name(), Point: pointID, PointName: pointName, Day: dayStr, Unit: provider.Unit}
 
 	if !force {
-		has, err := st.Has(ctx, p.Name(), pointID, day)
+		has, err := st.Has(ctx, p.Name(), pointID, day, p.Location())
 		if err != nil {
 			log.Error("checking stored data failed", "profile", profileLabel, "point", pointID, "day", dayStr, "error", err)
 			res.Error = err.Error()
@@ -608,7 +629,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 	res.Readings = readings
 	log.Debug("fetched readings", "profile", profileLabel, "point", pointID, "count", len(readings))
 
-	if err := st.Put(ctx, p.Name(), pointID, readings); err != nil {
+	if err := st.Put(ctx, p.Name(), pointID, readings, p.Location()); err != nil {
 		log.Error("storing readings failed", "profile", profileLabel, "point", pointID, "day", dayStr, "error", err)
 		res.Error = err.Error()
 		return res
@@ -620,7 +641,7 @@ func fetchPointResult(ctx context.Context, p provider.Provider, st store.Store, 
 // fetchPointDays resolves plan into concrete days for one provider/point
 // and fetches (and persists) each in order.
 func fetchPointDays(ctx context.Context, p provider.Provider, st store.Store, plan fetchPlan, force bool, profileLabel, pointID, pointName string, log *slog.Logger) ([]fetchResult, error) {
-	days, err := plan.days(ctx, st, p.Name(), pointID)
+	days, err := plan.days(ctx, st, p.Name(), pointID, p.Location())
 	if err != nil {
 		return nil, fmt.Errorf("resolving days to fetch for %s: %w", pointID, err)
 	}

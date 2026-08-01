@@ -45,4 +45,10 @@ type Provider interface {
 	// The portal may only have partial or no data yet for recent days —
 	// callers should not assume "yesterday" is complete.
 	FetchDay(ctx context.Context, pointID string, day time.Time) ([]Reading, error)
+
+	// Location is the timezone this provider's data is calendar-aligned
+	// to — e.g. FetchDay's "day" starts at midnight in this location, and
+	// storage buckets readings into day-files using it, so a day's data
+	// never splits across two files.
+	Location() *time.Location
 }

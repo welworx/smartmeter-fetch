@@ -31,6 +31,14 @@ func (s *stubProvider) FetchDay(ctx context.Context, pointID string, day time.Ti
 	return s.readings, s.err
 }
 
+func (s *stubProvider) Location() *time.Location {
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		panic(err)
+	}
+	return loc
+}
+
 func withStubProvider(t *testing.T, stub *stubProvider) {
 	t.Helper()
 	orig := providerFactories["evn"]
@@ -72,6 +80,7 @@ func TestRun_Help(t *testing.T) {
 		"-provider", `default "evn"`,
 		"-user", "-password", "-user-agent", "-log-level", "-verbose",
 		"-point", "-day", "-from", "-to", "-since-latest", "-data-dir", "-json", "-force",
+		"get", "-sample", "-format", "-out",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n---\n%s", want, out)
@@ -604,7 +613,7 @@ func seedYesterday(t *testing.T, dataDir string, value float64) string {
 	day := yesterday()
 	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
 		{Timestamp: day, Value: value},
-	}); err != nil {
+	}, (&stubProvider{}).Location()); err != nil {
 		t.Fatalf("seeding store: %v", err)
 	}
 	return day.Format(dayLayout)
@@ -680,7 +689,7 @@ func TestRun_Fetch_SkipsAlreadyStoredDayByDefault(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
 		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
-	}); err != nil {
+	}, (&stubProvider{}).Location()); err != nil {
 		t.Fatalf("seeding store: %v", err)
 	}
 	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}
@@ -710,7 +719,7 @@ func TestRun_Fetch_ForceRefetchesStoredDay(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := jsonfile.New(dataDir).Put(context.Background(), "evn", "AT001", []provider.Reading{
 		{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 1},
-	}); err != nil {
+	}, (&stubProvider{}).Location()); err != nil {
 		t.Fatalf("seeding store: %v", err)
 	}
 	stub := &stubProvider{readings: []provider.Reading{{Timestamp: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC), Value: 2}}}

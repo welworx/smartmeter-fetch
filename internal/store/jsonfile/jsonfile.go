@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/welworx/smartmeter-fetch/internal/atomicfile"
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
@@ -33,23 +34,26 @@ func (s *Store) pointDir(providerName, pointID string) string {
 	return filepath.Join(s.Dir, providerName, pointID)
 }
 
-func (s *Store) dayPath(providerName, pointID string, day time.Time) string {
-	return filepath.Join(s.pointDir(providerName, pointID), day.UTC().Format(dayFormat)+".json")
+func (s *Store) dayPath(providerName, pointID string, day time.Time, loc *time.Location) string {
+	return filepath.Join(s.pointDir(providerName, pointID), day.In(loc).Format(dayFormat)+".json")
 }
 
 // Put writes readings for one provider/point, grouped and replaced one day
-// at a time: readings are split by their UTC calendar day, and each day's
-// file is overwritten wholesale, so calling Put again for an already-stored
-// day (the portal republishing a delayed/revised day) replaces it rather
-// than duplicating entries.
-func (s *Store) Put(ctx context.Context, providerName, pointID string, readings []provider.Reading) error {
+// at a time: readings are split by their calendar day in loc (the
+// provider's own day-boundary timezone — every reading from a single
+// FetchDay call lands in exactly one file this way, since they were all
+// constructed from that same provider-local midnight), and each day's
+// file is overwritten wholesale, so calling Put again for an
+// already-stored day (the portal republishing a delayed/revised day)
+// replaces it rather than duplicating entries.
+func (s *Store) Put(ctx context.Context, providerName, pointID string, readings []provider.Reading, loc *time.Location) error {
 	if len(readings) == 0 {
 		return nil
 	}
 
 	byDay := make(map[string][]provider.Reading)
 	for _, r := range readings {
-		day := r.Timestamp.UTC().Format(dayFormat)
+		day := r.Timestamp.In(loc).Format(dayFormat)
 		byDay[day] = append(byDay[day], r)
 	}
 
@@ -61,11 +65,11 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		sort.Slice(dayReadings, func(i, j int) bool {
 			return dayReadings[i].Timestamp.Before(dayReadings[j].Timestamp)
 		})
-		dayTime, err := time.Parse(dayFormat, day)
+		dayTime, err := time.ParseInLocation(dayFormat, day, loc)
 		if err != nil {
 			return err
 		}
-		if err := writeAtomic(s.dayPath(providerName, pointID, dayTime), dayReadings); err != nil {
+		if err := writeAtomic(s.dayPath(providerName, pointID, dayTime, loc), dayReadings); err != nil {
 			return err
 		}
 	}
@@ -77,19 +81,7 @@ func writeAtomic(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op once the rename below succeeds
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteFile(path, data)
 }
 
 // Get returns every stored reading for providerName/pointID with a
@@ -131,11 +123,11 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 	return out, nil
 }
 
-// Latest returns the most recent day with a stored file for
+// Latest returns the most recent day (in loc) with a stored file for
 // providerName/pointID, found from the day filenames (which sort
 // lexicographically the same as chronologically) rather than reading and
 // parsing every file's contents.
-func (s *Store) Latest(ctx context.Context, providerName, pointID string) (time.Time, bool, error) {
+func (s *Store) Latest(ctx context.Context, providerName, pointID string, loc *time.Location) (time.Time, bool, error) {
 	entries, err := os.ReadDir(s.pointDir(providerName, pointID))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -157,16 +149,17 @@ func (s *Store) Latest(ctx context.Context, providerName, pointID string) (time.
 	if latest == "" {
 		return time.Time{}, false, nil
 	}
-	day, err := time.Parse(dayFormat, latest)
+	day, err := time.ParseInLocation(dayFormat, latest, loc)
 	if err != nil {
 		return time.Time{}, false, err
 	}
 	return day, true, nil
 }
 
-// Has reports whether a day file exists for providerName/pointID/day.
-func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.Time) (bool, error) {
-	_, err := os.Stat(s.dayPath(providerName, pointID, day))
+// Has reports whether a day file exists for providerName/pointID/day (day
+// interpreted in loc).
+func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.Time, loc *time.Location) (bool, error) {
+	_, err := os.Stat(s.dayPath(providerName, pointID, day, loc))
 	if err == nil {
 		return true, nil
 	}

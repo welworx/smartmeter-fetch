@@ -2,6 +2,7 @@ package jsonfile
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestPutGet_RoundTrip(t *testing.T) {
 		{Timestamp: mustParse(t, "2024-01-15T00:15:00Z"), Value: 100},
 		{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 50},
 	}
-	if err := s.Put(ctx, "evn", "AT001", readings); err != nil {
+	if err := s.Put(ctx, "evn", "AT001", readings, time.UTC); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -44,11 +45,11 @@ func TestPut_ReplacesDayInsteadOfDuplicating(t *testing.T) {
 	s := New(t.TempDir())
 	ctx := context.Background()
 	day := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1, Quality: "L3"}}
-	if err := s.Put(ctx, "evn", "AT001", day); err != nil {
+	if err := s.Put(ctx, "evn", "AT001", day, time.UTC); err != nil {
 		t.Fatalf("Put (first): %v", err)
 	}
 	revised := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 2, Quality: "L2"}}
-	if err := s.Put(ctx, "evn", "AT001", revised); err != nil {
+	if err := s.Put(ctx, "evn", "AT001", revised, time.UTC); err != nil {
 		t.Fatalf("Put (revised): %v", err)
 	}
 
@@ -68,11 +69,11 @@ func TestPut_SplitsReadingsAcrossDayFiles(t *testing.T) {
 		{Timestamp: mustParse(t, "2024-01-15T23:45:00Z"), Value: 1},
 		{Timestamp: mustParse(t, "2024-01-16T00:00:00Z"), Value: 2},
 	}
-	if err := s.Put(ctx, "evn", "AT001", readings); err != nil {
+	if err := s.Put(ctx, "evn", "AT001", readings, time.UTC); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	latest, found, err := s.Latest(ctx, "evn", "AT001")
+	latest, found, err := s.Latest(ctx, "evn", "AT001", time.UTC)
 	if err != nil {
 		t.Fatalf("Latest: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestGet_SinceFiltersOlderReadings(t *testing.T) {
 		{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1},
 		{Timestamp: mustParse(t, "2024-01-16T00:00:00Z"), Value: 2},
 	}
-	if err := s.Put(ctx, "evn", "AT001", readings); err != nil {
+	if err := s.Put(ctx, "evn", "AT001", readings, time.UTC); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -117,7 +118,7 @@ func TestGet_UnknownPointReturnsEmpty(t *testing.T) {
 
 func TestLatest_UnknownPointReturnsNotFound(t *testing.T) {
 	s := New(t.TempDir())
-	_, found, err := s.Latest(context.Background(), "evn", "ghost")
+	_, found, err := s.Latest(context.Background(), "evn", "ghost", time.UTC)
 	if err != nil {
 		t.Fatalf("Latest: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestHas(t *testing.T) {
 	s := New(t.TempDir())
 	ctx := context.Background()
 
-	has, err := s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T00:00:00Z"))
+	has, err := s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T00:00:00Z"), time.UTC)
 	if err != nil {
 		t.Fatalf("Has (before Put): %v", err)
 	}
@@ -140,11 +141,11 @@ func TestHas(t *testing.T) {
 
 	if err := s.Put(ctx, "evn", "AT001", []provider.Reading{
 		{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1},
-	}); err != nil {
+	}, time.UTC); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T12:00:00Z"))
+	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-15T12:00:00Z"), time.UTC)
 	if err != nil {
 		t.Fatalf("Has (after Put, same day): %v", err)
 	}
@@ -152,7 +153,7 @@ func TestHas(t *testing.T) {
 		t.Error("Has (after Put, same day) = false, want true")
 	}
 
-	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-16T00:00:00Z"))
+	has, err = s.Has(ctx, "evn", "AT001", mustParse(t, "2024-01-16T00:00:00Z"), time.UTC)
 	if err != nil {
 		t.Fatalf("Has (different day): %v", err)
 	}
@@ -163,14 +164,135 @@ func TestHas(t *testing.T) {
 
 func TestPut_EmptyReadingsIsNoop(t *testing.T) {
 	s := New(t.TempDir())
-	if err := s.Put(context.Background(), "evn", "AT001", nil); err != nil {
+	if err := s.Put(context.Background(), "evn", "AT001", nil, time.UTC); err != nil {
 		t.Fatalf("Put(nil): %v", err)
 	}
-	_, found, err := s.Latest(context.Background(), "evn", "AT001")
+	_, found, err := s.Latest(context.Background(), "evn", "AT001", time.UTC)
 	if err != nil {
 		t.Fatalf("Latest: %v", err)
 	}
 	if found {
 		t.Error("Latest after Put(nil): found = true, want false")
 	}
+}
+
+// buildViennaDayReadings returns a full Vienna-local day's worth of
+// quarter-hourly readings for day (Y/M/D used as-is, matching how
+// evn.FetchDay constructs them from a requested day) — 96 readings on a
+// normal day, fewer/more on a DST-transition day, mirroring the real
+// provider's output shape.
+func buildViennaDayReadings(t *testing.T, loc *time.Location, year int, month time.Month, day int, count int, value float64) []provider.Reading {
+	t.Helper()
+	midnight := time.Date(year, month, day, 0, 0, 0, 0, loc)
+	readings := make([]provider.Reading, count)
+	for i := range readings {
+		readings[i] = provider.Reading{
+			Timestamp: midnight.Add(time.Duration(i) * 15 * time.Minute).UTC(),
+			Value:     value,
+		}
+	}
+	return readings
+}
+
+func TestPut_AscendingDaysDoNotClobberEachOther(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	loc := testViennaLocation(t)
+
+	day14 := buildViennaDayReadings(t, loc, 2024, 1, 14, 96, 1)
+	day15 := buildViennaDayReadings(t, loc, 2024, 1, 15, 96, 2)
+
+	if err := s.Put(ctx, "evn", "AT001", day14, loc); err != nil {
+		t.Fatalf("Put(day14): %v", err)
+	}
+	if err := s.Put(ctx, "evn", "AT001", day15, loc); err != nil {
+		t.Fatalf("Put(day15): %v", err)
+	}
+
+	got, err := s.Get(ctx, "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got) != 192 {
+		t.Fatalf("Get after two ascending Puts = %d readings, want 192 (96+96, neither day clobbered)", len(got))
+	}
+
+	day14Count, day15Count := 0, 0
+	for _, r := range got {
+		switch r.Value {
+		case 1:
+			day14Count++
+		case 2:
+			day15Count++
+		}
+	}
+	if day14Count != 96 {
+		t.Errorf("day14Count = %d, want 96 (day14's file must not have been overwritten by day15's spillover)", day14Count)
+	}
+	if day15Count != 96 {
+		t.Errorf("day15Count = %d, want 96", day15Count)
+	}
+
+	entries, err := os.ReadDir(s.pointDir("evn", "AT001"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 2 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Errorf("day files = %v, want exactly 2 (one per Vienna day, no UTC-day splitting)", names)
+	}
+}
+
+func TestPut_DSTSpringForward(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	loc := testViennaLocation(t)
+
+	// 2024-03-31 is Vienna's spring-forward day: 02:00-03:00 doesn't
+	// exist, so the day is 23 hours long — 92 quarter-hour readings.
+	readings := buildViennaDayReadings(t, loc, 2024, 3, 31, 92, 5)
+	if err := s.Put(ctx, "evn", "AT001", readings, loc); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := s.Get(ctx, "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got) != 92 {
+		t.Fatalf("Get = %d readings, want 92 (23-hour spring-forward day, none dropped)", len(got))
+	}
+}
+
+func TestPut_DSTFallBack(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	loc := testViennaLocation(t)
+
+	// 2024-10-27 is Vienna's fall-back day: 02:00-03:00 happens twice,
+	// so the day is 25 hours long — 100 quarter-hour readings.
+	readings := buildViennaDayReadings(t, loc, 2024, 10, 27, 100, 7)
+	if err := s.Put(ctx, "evn", "AT001", readings, loc); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := s.Get(ctx, "evn", "AT001", time.Time{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got) != 100 {
+		t.Fatalf("Get = %d readings, want 100 (25-hour fall-back day, none dropped or duplicated)", len(got))
+	}
+}
+
+func testViennaLocation(t *testing.T) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		t.Fatalf("time.LoadLocation(Europe/Vienna): %v", err)
+	}
+	return loc
 }
