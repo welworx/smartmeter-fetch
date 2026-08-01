@@ -29,6 +29,11 @@ dockers:
       - "ghcr.io/welworx/smartmeter-fetch:{{ .Tag }}-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
+      # image.source links the GHCR package to this repo (still needs a
+      # one-time manual flip to public after the first push).
+      - "--label=org.opencontainers.image.source=https://github.com/welworx/smartmeter-fetch"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
   - id: smartmeter-fetch-arm64
     ids: [smartmeter-fetch]
     goos: linux
@@ -39,6 +44,9 @@ dockers:
       - "ghcr.io/welworx/smartmeter-fetch:{{ .Tag }}-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/welworx/smartmeter-fetch"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
 
 docker_manifests:
   - name_template: "ghcr.io/welworx/smartmeter-fetch:{{ .Tag }}"

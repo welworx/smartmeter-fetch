@@ -119,7 +119,7 @@ podman run -d \
   --name smartmeter-fetch \
   -e SMARTMETER_USER=you@example.com \
   -e SMARTMETER_PASSWORD=hunter2 \
-  -v ./data:/data \
+  -v ./data:/data:U \
   -e SMARTMETER_DATA_DIR=/data \
   -p 8790:8790 \
   --user 65532:65532 \
@@ -129,13 +129,31 @@ podman run -d \
 */15 * * * * podman exec smartmeter-fetch /smartmeter-fetch fetch -since-latest
 ```
 
-The image runs as the distroless `nonroot` user (UID/GID `65532`) — the
-mounted data directory needs to be writable by that UID
-(`chown -R 65532:65532 ./data`, or set `--user`/`user:` as shown above).
+The image runs as the distroless `nonroot` user (UID/GID `65532`), so the
+mounted data directory has to be writable by that user. The `:U` on the
+`-v` mount tells podman to chown the source directory to whatever host
+UID/GID the container's `65532` actually maps to — which is the point: a
+plain `chown -R 65532:65532 ./data` on the host is only correct for
+*rootful* podman/docker. Under rootless podman (the default) container UID
+`65532` maps into your subuid range, not to host UID `65532`, so the
+container still can't write and `fetch` fails on its first write while the
+API happily keeps serving `[]`. The rootless equivalent of a manual chown
+is `podman unshare chown -R 65532:65532 ./data`; `:U` does it for you and
+is correct in both modes.
+
+On SELinux hosts (Fedora, RHEL, CoreOS) the mount also needs a relabel
+option or the container is denied access outright: use `-v
+./data:/data:U,Z` (`Z` = private label for this container; `z` = shared
+label, if several containers mount the same directory).
 
 See [`docs/podman-compose.example.yml`](docs/podman-compose.example.yml)
 for the same setup via `podman-compose`. The API's OpenAPI 3.0 description
 is served at `GET /openapi.json`.
+
+The first release pushes the GHCR package as **private** — flip it to
+public once, by hand, under the repo's Packages settings. The
+`org.opencontainers.image.source` label links the package to this repo but
+does not change its visibility.
 
 ## Disclaimer
 

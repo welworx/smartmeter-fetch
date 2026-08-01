@@ -13,12 +13,22 @@ services:
     image: ghcr.io/welworx/smartmeter-fetch:latest
     container_name: smartmeter-fetch # required: the host crontab targets this name
     restart: unless-stopped
-    user: "65532:65532" # distroless nonroot UID/GID; chown ./data to match
+    user: "65532:65532" # distroless nonroot UID/GID
     environment:
       SMARTMETER_USER: you@example.com
       SMARTMETER_PASSWORD: hunter2
       SMARTMETER_DATA_DIR: /data
     volumes:
-      - ./data:/data
+      # :U makes podman chown ./data to whatever host UID/GID the container's
+      # 65532 maps to — needed under rootless podman, where it is NOT host UID
+      # 65532. A plain `chown -R 65532:65532 ./data` only works rootful.
+      #
+      # SELinux hosts (Fedora/RHEL/CoreOS) also need a relabel: use `:Z`
+      # (private) or `:z` (shared). podman-compose mishandles the combined
+      # `:U,Z` form (containers/podman-compose#412), so on SELinux use `:Z`
+      # alone here and do the ownership fix once, up front, with:
+      #
+      #   podman unshare chown -R 65532:65532 ./data
+      - ./data:/data:U
     ports:
       - "8790:8790"

@@ -29,8 +29,9 @@ of Home Assistant and should stay that way.
   breaking-change surface, not an internal implementation detail.
 - `Containerfile` — copies the binary goreleaser cross-compiles into a
   distroless image; `serve` is the container's entrypoint. New data is
-  pulled in via `podman exec <container> smartmeter-fetch fetch
+  pulled in via `podman exec <container> /smartmeter-fetch fetch
   -since-latest` on a host cron schedule, not an in-container cron daemon
+  (the leading `/` is required — distroless has no `/` on `PATH`)
   — see `README.md#container`.
 - `internal/config/` — the encrypted credential profile store
   (`credentials.enc`: argon2id-derived-key AES-256-GCM, atomic write). A
