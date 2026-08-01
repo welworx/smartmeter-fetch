@@ -176,7 +176,7 @@ the username/password by logging into the portal before saving.
 
 Usage:
   smartmeter-fetch profile add <name> [-provider evn]      add a profile (prompts for username/password)
-  smartmeter-fetch profile list                            list configured profiles (name, provider, username)
+  smartmeter-fetch profile list                            show configured profiles (name, provider, username)
   smartmeter-fetch profile update <name> [-provider evn]   change a profile's provider/username/password (blank keeps current)
   smartmeter-fetch profile remove <name>                   remove a profile
   smartmeter-fetch profile verify [name]                   log into the portal with each stored profile (or just

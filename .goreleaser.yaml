@@ -1,0 +1,24 @@
+version: 2
+
+builds:
+  - id: smartmeter-fetch
+    binary: smartmeter-fetch
+    main: .
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -X main.version={{ .Tag }}
+
+archives:
+  - id: smartmeter-fetch
+    formats: [binary]
+    name_template: "smartmeter-fetch-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: "SHA256SUMS.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: welworx
+    name: smartmeter-fetch
