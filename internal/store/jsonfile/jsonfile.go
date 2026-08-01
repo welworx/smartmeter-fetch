@@ -15,6 +15,7 @@ import (
 
 	"github.com/welworx/smartmeter-fetch/internal/atomicfile"
 	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/store"
 )
 
 const dayFormat = "2006-01-02"
@@ -167,4 +168,41 @@ func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.
 		return false, nil
 	}
 	return false, err
+}
+
+// ListPoints returns every provider/point pair with data currently
+// stored under Dir, discovered from the directory layout itself — no
+// portal call, so this works without credentials.
+func (s *Store) ListPoints(ctx context.Context) ([]store.PointRef, error) {
+	providerEntries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var out []store.PointRef
+	for _, pe := range providerEntries {
+		if !pe.IsDir() {
+			continue
+		}
+		pointEntries, err := os.ReadDir(filepath.Join(s.Dir, pe.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, pointE := range pointEntries {
+			if !pointE.IsDir() {
+				continue
+			}
+			out = append(out, store.PointRef{Provider: pe.Name(), ID: pointE.Name()})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider != out[j].Provider {
+			return out[i].Provider < out[j].Provider
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
 }

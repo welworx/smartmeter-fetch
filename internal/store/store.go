@@ -9,6 +9,12 @@ import (
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
+// PointRef identifies one provider/point pair with data currently stored.
+type PointRef struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+}
+
 // Store persists and retrieves readings, keyed by provider name and
 // metering point ID.
 type Store interface {
@@ -38,4 +44,11 @@ type Store interface {
 	// provider/point on one day (in loc), so a caller can skip a
 	// redundant fetch.
 	Has(ctx context.Context, providerName, pointID string, day time.Time, loc *time.Location) (bool, error)
+
+	// ListPoints returns every provider/point pair with data currently
+	// stored, discovered from the store itself rather than the portal —
+	// so it works without credentials (e.g. for a read-only query
+	// server). Results are not required to be sorted by callers, but
+	// jsonfile.Store returns them sorted by provider then ID.
+	ListPoints(ctx context.Context) ([]PointRef, error)
 }

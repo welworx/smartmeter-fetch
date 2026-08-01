@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/welworx/smartmeter-fetch/internal/provider"
+	"github.com/welworx/smartmeter-fetch/internal/store"
 )
 
 func mustParse(t *testing.T, s string) time.Time {
@@ -295,4 +296,59 @@ func testViennaLocation(t *testing.T) *time.Location {
 		t.Fatalf("time.LoadLocation(Europe/Vienna): %v", err)
 	}
 	return loc
+}
+
+func TestListPoints_EmptyStore(t *testing.T) {
+	s := New(t.TempDir())
+	got, err := s.ListPoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListPoints(empty store) = %+v, want empty", got)
+	}
+}
+
+func TestListPoints_MissingDir(t *testing.T) {
+	s := New(t.TempDir() + "/does-not-exist")
+	got, err := s.ListPoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListPoints(missing dir) = %+v, want empty", got)
+	}
+}
+
+func TestListPoints_MultipleProvidersAndPointsSortedByProviderThenID(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	one := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1}}
+	if err := s.Put(ctx, "evn", "AT002", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Put(ctx, "evn", "AT001", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := s.Put(ctx, "otherprovider", "XY001", one, time.UTC); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := s.ListPoints(ctx)
+	if err != nil {
+		t.Fatalf("ListPoints: %v", err)
+	}
+	want := []store.PointRef{
+		{Provider: "evn", ID: "AT001"},
+		{Provider: "evn", ID: "AT002"},
+		{Provider: "otherprovider", ID: "XY001"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListPoints = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListPoints[%d] = %+v, want %+v (want sorted by provider then id)", i, got[i], want[i])
+		}
+	}
 }
