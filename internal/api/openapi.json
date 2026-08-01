@@ -1,0 +1,87 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "smartmeter-fetch query API",
+    "version": "v1",
+    "description": "Read-only API for querying smart meter readings already fetched and stored by smartmeter-fetch. No authentication; intended for a trusted LAN."
+  },
+  "paths": {
+    "/v1/points": {
+      "get": {
+        "summary": "List known metering points",
+        "operationId": "listPoints",
+        "responses": {
+          "200": {
+            "description": "Metering points with stored data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/PointRef" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/readings": {
+      "get": {
+        "summary": "Get readings for one metering point",
+        "operationId": "getReadings",
+        "parameters": [
+          {
+            "name": "point",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Metering point ID, as returned by /v1/points"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "format": "date-time" },
+            "description": "RFC3339 timestamp; only readings at or after this instant are returned. Omit for all stored history."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readings ordered ascending by timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Reading" }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing point or malformed since" },
+          "404": { "description": "Unknown point" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PointRef": {
+        "type": "object",
+        "required": ["provider", "id"],
+        "properties": {
+          "provider": { "type": "string", "example": "evn" },
+          "id": { "type": "string", "example": "AT001" }
+        }
+      },
+      "Reading": {
+        "type": "object",
+        "required": ["timestamp", "value"],
+        "properties": {
+          "timestamp": { "type": "string", "format": "date-time", "description": "Start of the interval, UTC" },
+          "value": { "type": "number", "description": "Energy value in Wh" },
+          "quality": { "type": "string", "enum": ["L2", "L3"], "description": "Portal data-quality code, if reported. Absent for measured values." }
+        }
+      }
+    }
+  }
+}
