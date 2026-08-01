@@ -234,7 +234,11 @@ func TestPut_AscendingDaysDoNotClobberEachOther(t *testing.T) {
 		t.Errorf("day15Count = %d, want 96", day15Count)
 	}
 
-	entries, err := os.ReadDir(s.pointDir("evn", "AT001"))
+	dir, err := s.pointDir("evn", "AT001")
+	if err != nil {
+		t.Fatalf("pointDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
@@ -349,6 +353,38 @@ func TestListPoints_MultipleProvidersAndPointsSortedByProviderThenID(t *testing.
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("ListPoints[%d] = %+v, want %+v (want sorted by provider then id)", i, got[i], want[i])
+		}
+	}
+}
+
+// TestRejectsPathTraversalInProviderOrPointID guards against CWE-22: since
+// internal/api resolves an HTTP query parameter into a pointID before
+// calling into this store, providerName/pointID must never be trusted to
+// stay within Dir on their own.
+func TestRejectsPathTraversalInProviderOrPointID(t *testing.T) {
+	s := New(t.TempDir())
+	ctx := context.Background()
+	reading := []provider.Reading{{Timestamp: mustParse(t, "2024-01-15T00:00:00Z"), Value: 1}}
+
+	badNames := []string{"..", "../etc", "a/../../etc", "a/b", `a\b`, ""}
+	for _, bad := range badNames {
+		if err := s.Put(ctx, bad, "AT001", reading, time.UTC); err == nil {
+			t.Errorf("Put(providerName=%q): want error, got nil", bad)
+		}
+		if err := s.Put(ctx, "evn", bad, reading, time.UTC); err == nil {
+			t.Errorf("Put(pointID=%q): want error, got nil", bad)
+		}
+		if _, err := s.Get(ctx, bad, "AT001", time.Time{}); err == nil {
+			t.Errorf("Get(providerName=%q): want error, got nil", bad)
+		}
+		if _, err := s.Get(ctx, "evn", bad, time.Time{}); err == nil {
+			t.Errorf("Get(pointID=%q): want error, got nil", bad)
+		}
+		if _, _, err := s.Latest(ctx, "evn", bad, time.UTC); err == nil {
+			t.Errorf("Latest(pointID=%q): want error, got nil", bad)
+		}
+		if _, err := s.Has(ctx, "evn", bad, mustParse(t, "2024-01-15T00:00:00Z"), time.UTC); err == nil {
+			t.Errorf("Has(pointID=%q): want error, got nil", bad)
 		}
 	}
 }

@@ -7,6 +7,7 @@ package jsonfile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,12 +32,32 @@ func New(dir string) *Store {
 	return &Store{Dir: dir}
 }
 
-func (s *Store) pointDir(providerName, pointID string) string {
-	return filepath.Join(s.Dir, providerName, pointID)
+// pointDir returns the directory for providerName/pointID under Dir. It
+// rejects either name if it isn't safe to use as a single path segment
+// (empty, ".", "..", or containing a path separator) — providerName and
+// pointID can originate from untrusted input (internal/api resolves an
+// HTTP query parameter to a pointID before calling into this store), so
+// every path built from them must be confined under Dir.
+func (s *Store) pointDir(providerName, pointID string) (string, error) {
+	if !validSegment(providerName) {
+		return "", fmt.Errorf("invalid provider name %q", providerName)
+	}
+	if !validSegment(pointID) {
+		return "", fmt.Errorf("invalid point ID %q", pointID)
+	}
+	return filepath.Join(s.Dir, providerName, pointID), nil
 }
 
-func (s *Store) dayPath(providerName, pointID string, day time.Time, loc *time.Location) string {
-	return filepath.Join(s.pointDir(providerName, pointID), day.In(loc).Format(dayFormat)+".json")
+func validSegment(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
+}
+
+func (s *Store) dayPath(providerName, pointID string, day time.Time, loc *time.Location) (string, error) {
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, day.In(loc).Format(dayFormat)+".json"), nil
 }
 
 // Put writes readings for one provider/point, grouped and replaced one day
@@ -58,7 +79,10 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		byDay[day] = append(byDay[day], r)
 	}
 
-	dir := s.pointDir(providerName, pointID)
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -70,7 +94,11 @@ func (s *Store) Put(ctx context.Context, providerName, pointID string, readings 
 		if err != nil {
 			return err
 		}
-		if err := writeAtomic(s.dayPath(providerName, pointID, dayTime, loc), dayReadings); err != nil {
+		path, err := s.dayPath(providerName, pointID, dayTime, loc)
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(path, dayReadings); err != nil {
 			return err
 		}
 	}
@@ -93,7 +121,11 @@ func writeAtomic(path string, v any) error {
 // single-user tool's data volume; add filename-based pruning if Get ever
 // shows up in a profile.
 func (s *Store) Get(ctx context.Context, providerName, pointID string, since time.Time) ([]provider.Reading, error) {
-	entries, err := os.ReadDir(s.pointDir(providerName, pointID))
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -107,7 +139,7 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 			continue
 		}
 		var dayReadings []provider.Reading
-		data, err := os.ReadFile(filepath.Join(s.pointDir(providerName, pointID), e.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +161,11 @@ func (s *Store) Get(ctx context.Context, providerName, pointID string, since tim
 // lexicographically the same as chronologically) rather than reading and
 // parsing every file's contents.
 func (s *Store) Latest(ctx context.Context, providerName, pointID string, loc *time.Location) (time.Time, bool, error) {
-	entries, err := os.ReadDir(s.pointDir(providerName, pointID))
+	dir, err := s.pointDir(providerName, pointID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return time.Time{}, false, nil
@@ -160,7 +196,11 @@ func (s *Store) Latest(ctx context.Context, providerName, pointID string, loc *t
 // Has reports whether a day file exists for providerName/pointID/day (day
 // interpreted in loc).
 func (s *Store) Has(ctx context.Context, providerName, pointID string, day time.Time, loc *time.Location) (bool, error) {
-	_, err := os.Stat(s.dayPath(providerName, pointID, day, loc))
+	path, err := s.dayPath(providerName, pointID, day, loc)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
 	if err == nil {
 		return true, nil
 	}
