@@ -42,6 +42,7 @@ type pointOutput struct {
 	Sample         string      `json:"sample"`
 	ZaehlerpunktID int         `json:"zaehlerpunkt_id,omitempty"`
 	Readings       []outputRow `json:"readings"`
+	loc            *time.Location
 }
 
 // formatValue renders a reading's value for text and CSV output. 'f'

@@ -13,7 +13,7 @@ import (
 func TestRenderPath_SubstitutesAllPlaceholders(t *testing.T) {
 	vars := pathVars{Profile: "home", Zaehlerpunkt: "AT0020000000000000000000100123456", ZaehlerpunktID: 1}
 	tmpl := "<profile>/<zaehlerpunkt_id>/<zaehlerpunkt>/<yyyy>/<mm>/<dd>/data.csv"
-	got := renderPath(tmpl, vars, time.Date(2024, 3, 7, 0, 0, 0, 0, time.UTC))
+	got := renderPath(tmpl, vars, time.Date(2024, 3, 7, 0, 0, 0, 0, time.UTC), testViennaLoc)
 	want := "home/1/AT0020000000000000000000100123456/2024/03/07/data.csv"
 	if got != want {
 		t.Errorf("renderPath = %q, want %q", got, want)
@@ -22,7 +22,7 @@ func TestRenderPath_SubstitutesAllPlaceholders(t *testing.T) {
 
 func TestRenderPath_ZaehlerpunktIDDoesNotCollideWithZaehlerpunkt(t *testing.T) {
 	vars := pathVars{Zaehlerpunkt: "AT001", ZaehlerpunktID: 7}
-	got := renderPath("<zaehlerpunkt_id>-<zaehlerpunkt>.csv", vars, time.Now())
+	got := renderPath("<zaehlerpunkt_id>-<zaehlerpunkt>.csv", vars, time.Now(), testViennaLoc)
 	want := "7-AT001.csv"
 	if got != want {
 		t.Errorf("renderPath = %q, want %q", got, want)
@@ -36,7 +36,7 @@ func TestGroupRowsByPath_YearOnlyTemplateSplitsPerYear(t *testing.T) {
 		{Timestamp: time.Date(2023, 12, 31, 22, 0, 0, 0, time.UTC), Value: 1},
 		{Timestamp: time.Date(2023, 12, 31, 23, 0, 0, 0, time.UTC), Value: 2},
 	}
-	groups := groupRowsByPath("<yyyy>/data.csv", pathVars{}, rows)
+	groups := groupRowsByPath("<yyyy>/data.csv", pathVars{}, rows, testViennaLoc)
 	if len(groups) != 2 {
 		t.Fatalf("groups = %+v, want 2 (one per year)", groups)
 	}
@@ -50,7 +50,7 @@ func TestGroupRowsByPath_NoDatePlaceholderSingleGroup(t *testing.T) {
 		{Timestamp: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), Value: 1},
 		{Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Value: 2},
 	}
-	groups := groupRowsByPath("data.csv", pathVars{}, rows)
+	groups := groupRowsByPath("data.csv", pathVars{}, rows, testViennaLoc)
 	if len(groups) != 1 || len(groups["data.csv"]) != 2 {
 		t.Errorf("groups = %+v, want single group with both rows", groups)
 	}
@@ -75,7 +75,7 @@ func TestWriteGroupedOutput_WritesOneFilePerYear(t *testing.T) {
 		{Timestamp: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC), Value: 20},
 	})
 	tmpl := filepath.Join(dir, "<yyyy>", "data.csv")
-	if err := writeGroupedOutput(tmpl, pathVars{}, rows); err != nil {
+	if err := writeGroupedOutput(tmpl, pathVars{}, rows, testViennaLoc); err != nil {
 		t.Fatalf("writeGroupedOutput: %v", err)
 	}
 	for _, year := range []string{"2023", "2024"} {
@@ -93,7 +93,7 @@ func TestWriteGroupedOutput_JSONFormat(t *testing.T) {
 	dir := t.TempDir()
 	rows := toOutputRows([]provider.Reading{{Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Value: 5}})
 	tmpl := filepath.Join(dir, "data.json")
-	if err := writeGroupedOutput(tmpl, pathVars{}, rows); err != nil {
+	if err := writeGroupedOutput(tmpl, pathVars{}, rows, testViennaLoc); err != nil {
 		t.Fatalf("writeGroupedOutput: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "data.json"))

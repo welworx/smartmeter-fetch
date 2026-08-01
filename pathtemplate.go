@@ -24,11 +24,11 @@ type pathVars struct {
 // row's bucket timestamp for the date placeholders). <zaehlerpunkt_id> is
 // listed before <zaehlerpunkt> so the longer placeholder is never
 // shadowed by a partial match of the shorter one. The date placeholders
-// render in Vienna local time, matching the buckets aggregate emits (it
-// returns bucket starts as UTC), so a Vienna-day bucket never lands in a
-// file named for the previous day, month or year.
-func renderPath(tmpl string, vars pathVars, t time.Time) string {
-	t = t.In(viennaLocation)
+// render in loc (the provider's day-boundary timezone, matching the
+// buckets aggregate emits — it returns bucket starts as UTC), so a bucket
+// never lands in a file named for the previous day, month, or year.
+func renderPath(tmpl string, vars pathVars, t time.Time, loc *time.Location) string {
+	t = t.In(loc)
 	r := strings.NewReplacer(
 		"<zaehlerpunkt_id>", strconv.Itoa(vars.ZaehlerpunktID),
 		"<zaehlerpunkt>", vars.Zaehlerpunkt,
@@ -40,15 +40,16 @@ func renderPath(tmpl string, vars pathVars, t time.Time) string {
 	return r.Replace(tmpl)
 }
 
-// groupRowsByPath renders tmpl per row's timestamp and groups rows by the
-// resulting path — a template containing <yyyy> alone therefore produces
-// one file per calendar year, <yyyy>/<mm> one per month, and a template
-// with no date placeholder collapses to a single group, with no
-// special-casing needed for any particular placeholder combination.
-func groupRowsByPath(tmpl string, vars pathVars, rows []outputRow) map[string][]outputRow {
+// groupRowsByPath renders tmpl per row's timestamp (in loc) and groups
+// rows by the resulting path — a template containing <yyyy> alone
+// therefore produces one file per calendar year, <yyyy>/<mm> one per
+// month, and a template with no date placeholder collapses to a single
+// group, with no special-casing needed for any particular placeholder
+// combination.
+func groupRowsByPath(tmpl string, vars pathVars, rows []outputRow, loc *time.Location) map[string][]outputRow {
 	groups := make(map[string][]outputRow)
 	for _, r := range rows {
-		path := renderPath(tmpl, vars, r.Timestamp)
+		path := renderPath(tmpl, vars, r.Timestamp, loc)
 		groups[path] = append(groups[path], r)
 	}
 	return groups
@@ -67,14 +68,15 @@ func outFormat(tmpl string) (string, error) {
 }
 
 // writeGroupedOutput groups rows by their rendered path (see
-// groupRowsByPath) and atomically writes each group to its file, in the
-// format implied by tmpl's extension.
-func writeGroupedOutput(tmpl string, vars pathVars, rows []outputRow) error {
+// groupRowsByPath, using loc for the date placeholders) and atomically
+// writes each group to its file, in the format implied by tmpl's
+// extension.
+func writeGroupedOutput(tmpl string, vars pathVars, rows []outputRow, loc *time.Location) error {
 	format, err := outFormat(tmpl)
 	if err != nil {
 		return err
 	}
-	for path, groupRows := range groupRowsByPath(tmpl, vars, rows) {
+	for path, groupRows := range groupRowsByPath(tmpl, vars, rows, loc) {
 		var data []byte
 		switch format {
 		case "csv":

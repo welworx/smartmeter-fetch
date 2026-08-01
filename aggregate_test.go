@@ -8,6 +8,14 @@ import (
 	"github.com/welworx/smartmeter-fetch/internal/provider"
 )
 
+var testViennaLoc = func() *time.Location {
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		panic(err)
+	}
+	return loc
+}()
+
 func mustParseRFC3339(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts, err := time.Parse(time.RFC3339, s)
@@ -30,7 +38,7 @@ func TestParseSampleLevel(t *testing.T) {
 
 func TestAggregate_RawReturnsInputUnchanged(t *testing.T) {
 	in := []provider.Reading{{Timestamp: mustParseRFC3339(t, "2024-01-15T00:00:00Z"), Value: 1}}
-	out := aggregate(in, sampleRaw)
+	out := aggregate(in, sampleRaw, testViennaLoc)
 	if len(out) != 1 || out[0].Value != 1 {
 		t.Errorf("aggregate(raw) = %+v, want input unchanged", out)
 	}
@@ -44,7 +52,7 @@ func TestAggregate_HourSumsQuarterHourReadings(t *testing.T) {
 		{Timestamp: mustParseRFC3339(t, "2024-01-15T10:45:00Z"), Value: 400},
 		{Timestamp: mustParseRFC3339(t, "2024-01-15T11:00:00Z"), Value: 1},
 	}
-	out := aggregate(in, sampleHour)
+	out := aggregate(in, sampleHour, testViennaLoc)
 	if len(out) != 2 {
 		t.Fatalf("aggregate(hour) = %+v, want 2 buckets", out)
 	}
@@ -68,7 +76,7 @@ func TestAggregate_DayBucketsByViennaWallClockNotUTC(t *testing.T) {
 		{Timestamp: mustParseRFC3339(t, "2024-06-14T22:15:00Z"), Value: 10},
 		{Timestamp: mustParseRFC3339(t, "2024-06-14T22:30:00Z"), Value: 20},
 	}
-	out := aggregate(in, sampleDay)
+	out := aggregate(in, sampleDay, testViennaLoc)
 	if len(out) != 1 {
 		t.Fatalf("aggregate(day) = %+v, want 1 bucket", out)
 	}
@@ -86,7 +94,7 @@ func TestAggregate_WeekBucketsStartOnMonday(t *testing.T) {
 	// 2024-01-17 is a Wednesday; the containing week (Vienna-local)
 	// starts Monday 2024-01-15 00:00 CET = 2024-01-14T23:00:00Z.
 	in := []provider.Reading{{Timestamp: mustParseRFC3339(t, "2024-01-17T10:00:00Z"), Value: 5}}
-	out := aggregate(in, sampleWeek)
+	out := aggregate(in, sampleWeek, testViennaLoc)
 	want := mustParseRFC3339(t, "2024-01-14T23:00:00Z")
 	if len(out) != 1 || !out[0].Timestamp.Equal(want) {
 		t.Errorf("aggregate(week) = %+v, want single bucket starting %v", out, want)
@@ -98,7 +106,7 @@ func TestAggregate_MonthAndQuarterBucketStarts(t *testing.T) {
 		{Timestamp: mustParseRFC3339(t, "2024-02-10T10:00:00Z"), Value: 1},
 		{Timestamp: mustParseRFC3339(t, "2024-05-10T10:00:00Z"), Value: 1},
 	}
-	month := aggregate(in, sampleMonth)
+	month := aggregate(in, sampleMonth, testViennaLoc)
 	if len(month) != 2 {
 		t.Fatalf("aggregate(month) = %+v, want 2 buckets", month)
 	}
@@ -108,7 +116,7 @@ func TestAggregate_MonthAndQuarterBucketStarts(t *testing.T) {
 		t.Errorf("month[0].Timestamp = %v, want %v", month[0].Timestamp, wantFeb)
 	}
 
-	quarter := aggregate(in, sampleQuarter)
+	quarter := aggregate(in, sampleQuarter, testViennaLoc)
 	if len(quarter) != 2 {
 		t.Fatalf("aggregate(quarter) = %+v, want 2 buckets (Feb is Q1, May is Q2)", quarter)
 	}
@@ -121,7 +129,7 @@ func TestAggregate_QualityIsWorstOfConstituents(t *testing.T) {
 		{Timestamp: mustParseRFC3339(t, "2024-01-15T10:30:00Z"), Value: 1, Quality: "L3"},
 		{Timestamp: mustParseRFC3339(t, "2024-01-15T10:45:00Z"), Value: 1, Quality: "L2"},
 	}
-	out := aggregate(in, sampleHour)
+	out := aggregate(in, sampleHour, testViennaLoc)
 	if len(out) != 1 || out[0].Quality != "L3" {
 		t.Errorf("aggregate quality = %+v, want single bucket with Quality=L3", out)
 	}
@@ -133,7 +141,7 @@ func TestAggregate_OutputSortedAscending(t *testing.T) {
 		{Timestamp: mustParseRFC3339(t, "2024-01-01T00:00:00Z"), Value: 1},
 		{Timestamp: mustParseRFC3339(t, "2024-02-01T00:00:00Z"), Value: 1},
 	}
-	out := aggregate(in, sampleMonth)
+	out := aggregate(in, sampleMonth, testViennaLoc)
 	if len(out) != 3 {
 		t.Fatalf("aggregate(month) = %+v, want 3 buckets", out)
 	}

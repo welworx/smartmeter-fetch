@@ -187,6 +187,7 @@ func getPoint(ctx context.Context, p provider.Provider, st store.Store, plan fet
 		PointName:      pt.Name,
 		Sample:         string(sample),
 		ZaehlerpunktID: ordinal,
+		loc:            p.Location(),
 	}
 	// plan.days can legitimately resolve to nothing (-since-latest once the
 	// latest stored day is today or later), in which case there's no range
@@ -198,17 +199,18 @@ func getPoint(ctx context.Context, p provider.Provider, st store.Store, plan fet
 	// The read-back window comes from the days actually fetched, not from
 	// plan's time.Time values: those are UTC (and, for relative -from/-to,
 	// carry a wall-clock time of day), while readings are grouped by the
-	// Vienna-local day the provider assigned them to. Parsing the fetched
-	// day strings in viennaLocation gives exact Vienna-midnight bounds.
-	from, err := time.ParseInLocation(dayLayout, results[0].Day, viennaLocation)
+	// provider-local day the provider assigned them to. Parsing the
+	// fetched day strings in the provider's own location gives exact
+	// midnight-to-midnight bounds.
+	from, err := time.ParseInLocation(dayLayout, results[0].Day, p.Location())
 	if err != nil {
 		return pointOutput{}, fmt.Errorf("parsing day %q: %w", results[0].Day, err)
 	}
-	lastDay, err := time.ParseInLocation(dayLayout, results[len(results)-1].Day, viennaLocation)
+	lastDay, err := time.ParseInLocation(dayLayout, results[len(results)-1].Day, p.Location())
 	if err != nil {
 		return pointOutput{}, fmt.Errorf("parsing day %q: %w", results[len(results)-1].Day, err)
 	}
-	to := lastDay.AddDate(0, 0, 1) // exclusive end: Vienna midnight after the last fetched day
+	to := lastDay.AddDate(0, 0, 1) // exclusive end: midnight after the last fetched day
 
 	readings, err := st.Get(ctx, p.Name(), pt.ID, from)
 	if err != nil {
@@ -221,7 +223,7 @@ func getPoint(ctx context.Context, p provider.Provider, st store.Store, plan fet
 		}
 	}
 
-	out.Readings = toOutputRows(aggregate(filtered, sample))
+	out.Readings = toOutputRows(aggregate(filtered, sample, p.Location()))
 	return out, nil
 }
 
@@ -259,7 +261,7 @@ func writeGetOut(tmpl string, points []pointOutput, log *slog.Logger) int {
 	}
 	for _, po := range points {
 		vars := pathVars{Profile: po.Profile, Zaehlerpunkt: po.Point, ZaehlerpunktID: po.ZaehlerpunktID}
-		if err := writeGroupedOutput(tmpl, vars, po.Readings); err != nil {
+		if err := writeGroupedOutput(tmpl, vars, po.Readings, po.loc); err != nil {
 			log.Error("writing -out file(s) failed", "point", po.Point, "error", err)
 			return 1
 		}
