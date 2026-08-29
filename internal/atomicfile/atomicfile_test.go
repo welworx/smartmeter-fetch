@@ -53,6 +53,21 @@ func TestWriteFile_MkdirAllError(t *testing.T) {
 	}
 }
 
+func TestWriteFile_CreateTempError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let t.TempDir() clean up
+	path := filepath.Join(dir, "out.txt")
+	if err := WriteFile(path, []byte("x")); err == nil {
+		t.Fatal("expected error creating temp file in a read-only dir")
+	}
+}
+
 func TestWriteFile_NoLeftoverTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteFile(filepath.Join(dir, "out.txt"), []byte("x")); err != nil {
