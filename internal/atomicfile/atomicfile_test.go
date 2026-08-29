@@ -39,6 +39,20 @@ func TestWriteFile_ReplacesExistingContent(t *testing.T) {
 	}
 }
 
+func TestWriteFile_MkdirAllError(t *testing.T) {
+	// A regular file where a path component is expected to be a directory:
+	// os.MkdirAll fails (ENOTDIR), no permission tricks needed.
+	base := t.TempDir()
+	regularFile := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(regularFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(regularFile, "sub", "out.txt")
+	if err := WriteFile(path, []byte("x")); err == nil {
+		t.Fatal("expected error creating parent dir under a regular file")
+	}
+}
+
 func TestWriteFile_NoLeftoverTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteFile(filepath.Join(dir, "out.txt"), []byte("x")); err != nil {
