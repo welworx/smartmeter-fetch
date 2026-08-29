@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/welworx/smartmeter-fetch/internal/atomicfile"
 )
 
 // Profile is one stored portal login.
@@ -99,14 +101,10 @@ func SaveSecrets(dir string, passphrase []byte, profiles []Profile) error {
 	if err != nil {
 		return err
 	}
-	// Write to a temp file and rename over the real path so a crash or
-	// full disk mid-write can't leave a truncated/corrupt credentials.enc
-	// (os.Rename is atomic on POSIX, replace-on-existing on Windows).
-	tmp := credPath(dir) + ".tmp"
-	if err := os.WriteFile(tmp, blob, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, credPath(dir))
+	// atomicfile.WriteFile writes to a temp file and renames over the real
+	// path, so a crash or full disk mid-write can't leave a truncated/
+	// corrupt credentials.enc.
+	return atomicfile.WriteFile(credPath(dir), blob)
 }
 
 func deriveKey(passphrase, salt []byte) []byte {
