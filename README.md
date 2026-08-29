@@ -43,7 +43,7 @@ The EVN/Netz NÖ provider, the JSON file store, and a CLI to drive them
 persists readings to `-data-dir` without printing them by default (pass
 `-json` for that). `get` ensures a date range is fetched, then reads it
 back — as a table, JSON, or CSV, optionally aggregated (`-sample
-hour|day|week|month|quarter`) and optionally exported to templated file(s)
+raw|hour|day|week|month|quarter`, default `raw`) and optionally exported to templated file(s)
 via `-out`. Each file `-out` renders is replaced wholesale on every run
 (never appended to), so an export is only ever as complete as the range of
 the run that wrote it — `-data-dir` stays the source of truth. A day
