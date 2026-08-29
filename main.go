@@ -1,7 +1,7 @@
 // Command smartmeter-fetch fetches smart meter readings from grid operator
 // web portals and persists them as one JSON file per provider/point/day
-// (internal/store/jsonfile). The query API (internal/api) is not yet
-// implemented, so this CLI only covers fetch/store for now.
+// (internal/store/jsonfile), and serves them over a versioned HTTP API
+// (internal/api, via the "serve" command).
 package main
 
 import (
