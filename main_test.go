@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"log/slog"
 	"strings"
 	"testing"
@@ -767,3 +769,12 @@ type stubError string
 func (e stubError) Error() string { return string(e) }
 
 const errStub = stubError("stub provider error")
+
+func TestExitCodeForParseErr(t *testing.T) {
+	if code := exitCodeForParseErr(flag.ErrHelp); code != 0 {
+		t.Errorf("exitCodeForParseErr(flag.ErrHelp) = %d, want 0", code)
+	}
+	if code := exitCodeForParseErr(errors.New("boom")); code != 2 {
+		t.Errorf("exitCodeForParseErr(other error) = %d, want 2", code)
+	}
+}
