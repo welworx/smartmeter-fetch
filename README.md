@@ -109,13 +109,15 @@ type Provider interface {
     Name() string
     ListPoints(ctx context.Context) ([]Point, error)
     FetchDay(ctx context.Context, pointID string, day time.Time) ([]Reading, error)
+    Location() *time.Location // day-boundary timezone, e.g. FetchDay's "day"
 }
 
 type Store interface {
-    Put(ctx context.Context, provider, pointID string, readings []Reading) error
+    Put(ctx context.Context, provider, pointID string, readings []Reading, loc *time.Location) error
     Get(ctx context.Context, provider, pointID string, since time.Time) ([]Reading, error)
-    Latest(ctx context.Context, provider, pointID string) (day time.Time, found bool, err error)
-    Has(ctx context.Context, provider, pointID string, day time.Time) (bool, error)
+    Latest(ctx context.Context, provider, pointID string, loc *time.Location) (day time.Time, found bool, err error)
+    Has(ctx context.Context, provider, pointID string, day time.Time, loc *time.Location) (bool, error)
+    ListPoints(ctx context.Context) ([]PointRef, error)
 }
 ```
 
