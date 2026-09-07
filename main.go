@@ -455,7 +455,11 @@ func newFetchFlagSet(out io.Writer) (fs *flag.FlagSet, c *providerFlags, f *fetc
 
 const dayLayout = "2006-01-02"
 
-func parseDay(s string) (time.Time, error) { return time.Parse(dayLayout, s) }
+// parseDay parses s in the local zone, matching the local-zone "now"/
+// "yesterday" defaults used elsewhere in fetch flag resolution — mixing UTC
+// and local instants here previously let dayRange's After comparison drop
+// the last day of a range on machines ahead of UTC (issue #29).
+func parseDay(s string) (time.Time, error) { return time.ParseInLocation(dayLayout, s, time.Local) }
 
 func yesterday() time.Time { return time.Now().AddDate(0, 0, -1) }
 
